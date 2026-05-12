@@ -463,7 +463,10 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     const char *set_name = cg_only ? sd->set_cg : (is_v6 ? sd->set_v6 : sd->set_v4);
 
     ctx = nft_ctx_new(NFT_CTX_DEFAULT);
-    if (!ctx) return PAM_SERVICE_ERR;
+    if (!ctx) {
+        free(frag_buf);
+        return PAM_SERVICE_ERR;
+    }
 
     /*
      * Probe the shared filter chain for the ct accept rule. nftables
