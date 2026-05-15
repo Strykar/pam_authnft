@@ -223,8 +223,30 @@ static
 char *substitute_placeholders(const char *src, size_t src_len,
                               const char *placeholders[4],
                               const char *replacements[4]) {
-    /* Worst case: every placeholder expands. Over-allocate. */
-    size_t max_expand = src_len * 2 + 1;
+    /* Worst case: src is entirely back-to-back occurrences of whichever
+     * placeholder has the largest replacement-to-placeholder length ratio.
+     * The previous src_len*2 bound was wrong: @session_v4 (11 bytes) maps
+     * to a set-name up to SET_NAME_MAX+1 bytes (81), a ~7.4x expansion,
+     * so a fragment full of @session_v4 would fail the wi+rlen guard
+     * below even though it was perfectly valid.
+     *
+     * Use ceil(max_rep_len / min_ph_len) as the per-byte expansion bound.
+     * Slightly loose (mixes the worst rep_len with the worst ph_len from
+     * possibly different placeholders) but always safe and avoids a
+     * per-pair fraction comparison. */
+    size_t max_rep_len = 0;
+    size_t min_ph_len = SIZE_MAX;
+    for (size_t k = 0; k < 4; k++) {
+        size_t plen = strlen(placeholders[k]);
+        size_t rlen = strlen(replacements[k]);
+        if (plen == 0) return NULL;
+        if (rlen > max_rep_len) max_rep_len = rlen;
+        if (plen < min_ph_len) min_ph_len = plen;
+    }
+    size_t ratio = (max_rep_len + min_ph_len - 1) / min_ph_len;
+    if (ratio < 1) ratio = 1;
+    if (src_len > (SIZE_MAX - 1) / ratio) return NULL;
+    size_t max_expand = src_len * ratio + 1;
     char *out = malloc(max_expand);
     if (!out) return NULL;
 
