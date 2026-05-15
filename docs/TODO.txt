@@ -15,8 +15,8 @@ Near-term
     scaffold tangles with ASan interceptors under CI)
 [x] GCC + Clang build matrix in CI (.github/workflows/build.yml)
 [x] Coverity Scan weekly cron (.github/workflows/coverity.yml)
-[x] OpenSSF Best Practices badge (project 12496) — replaced the earlier
-    Scorecard approach; badge in README.md
+[x] OpenSSF Best Practices badge (project 12496) — added alongside the
+    Scorecard workflow (which still runs weekly); badge in README.md
 [ ] Dependabot + CodeQL rollout validation — both are live; "validation"
     here means periodically confirming the alert streams are actionable,
     not one-time setup. Soft-ongoing; revisit on significant config
@@ -111,6 +111,3 @@ Retired
 - Codecov upload — removed as the workflow went unused; coverage is
   now surfaced via sanitizer / cppcheck signal rather than a central
   badge. Dropped in commit 1257e0f.
-- OpenSSF Scorecard — replaced with OpenSSF Best Practices (project
-  12496) in commit 2c6eb73. Scorecard stale-alert cleanup completed
-  via code-scanning configuration deletion.
