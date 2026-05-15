@@ -24,6 +24,7 @@
 #include <grp.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <syslog.h>
 #include <time.h>
@@ -105,11 +106,21 @@ int session_file_write(pam_handle_t *pamh, const authnft_session_t *sd,
      * group was manually deleted, etc.) we still create the file with
      * mode 0640 owned by root:root — readable only by root, which is
      * stricter than the previous 0644 default. */
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+    /* open(2) honours the process umask, so a permissive ambient umask
+     * could land 0600 even when 0640 was requested (and a malicious
+     * caller of pam(8) could not lower it, but a misconfigured service
+     * could). Open at 0600 (which is always strict enough) and widen
+     * to 0640 explicitly via fchmod(2), which ignores umask. */
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) {
         if (pamh) pam_syslog(pamh, LOG_WARNING,
                              "authnft: session file open(%s) failed: %m", tmp);
         return -1;
+    }
+    if (fchmod(fd, 0640) < 0 && pamh) {
+        pam_syslog(pamh, LOG_WARNING,
+                   "authnft: session file fchmod(0640) failed on %s: %m "
+                   "— leaving mode 0600 (root-only readable)", tmp);
     }
 
     struct group *grp = getgrnam("authnft");
