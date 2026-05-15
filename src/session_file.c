@@ -137,11 +137,22 @@ int session_file_write(pam_handle_t *pamh, const authnft_session_t *sd,
     }
 
     ssize_t w = write(fd, json, (size_t)n);
-    close(fd);
     if (w != n) {
+        int saved_errno = errno;
+        (void)close(fd);
+        errno = saved_errno;
         (void)unlink(tmp);
         if (pamh) pam_syslog(pamh, LOG_WARNING,
                              "authnft: session file write failed: %m");
+        return -1;
+    }
+    /* close(2) can surface delayed write errors on NFS and other network
+     * filesystems; if it fails the file may be incomplete on disk, so
+     * unlink the tempfile rather than rename a possibly-corrupt record. */
+    if (close(fd) < 0) {
+        (void)unlink(tmp);
+        if (pamh) pam_syslog(pamh, LOG_WARNING,
+                             "authnft: session file close(%s) failed: %m", tmp);
         return -1;
     }
     if (rename(tmp, path) < 0) {
