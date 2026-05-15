@@ -259,6 +259,10 @@ Integration suite (`tests/integration_test.sh`):
         match after task migration
   10.13 Cross-session isolation — user A's deny rule does not affect
         user B's traffic (per-session set boundary)
+  10.14 Failed open_session leaves no leftover nft state and no
+        transient scope (rollback contract)
+  10.15 close_session crosses the sshd privsep boundary cleanly —
+        no per-session chain/set/scope leak after ssh disconnect
   10.16 Placeholder-dense fragment (eight rules each using
         @session_chain + @session_v4) loads under the ratio-based
         max_expand bound in substitute_placeholders
