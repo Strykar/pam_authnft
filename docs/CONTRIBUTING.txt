@@ -259,6 +259,9 @@ Integration suite (`tests/integration_test.sh`):
         match after task migration
   10.13 Cross-session isolation — user A's deny rule does not affect
         user B's traffic (per-session set boundary)
+  10.16 Placeholder-dense fragment (eight rules each using
+        @session_chain + @session_v4) loads under the ratio-based
+        max_expand bound in substitute_placeholders
   —     No memory errors or leaks under Valgrind memcheck
 
 

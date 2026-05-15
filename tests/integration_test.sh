@@ -726,4 +726,40 @@ NFT
 fi
 nft delete table inet authnft 2>/dev/null || true
 
+# 10.16: Fragment dense in @session_v4 exercises the ratio-based
+# max_expand bound (PR #40). The old src_len*2+1 over-allocation
+# would reject a fragment where the cumulative replacement length
+# exceeds twice the placeholder length, even though malloc could
+# have served it. With eight rules each using @session_chain and
+# @session_v4, this stage forces substitute_placeholders to walk
+# the full expansion budget.
+printf "${YELLOW}10.16: Placeholder-dense fragment loads under new bound${RESET}\n"
+{
+    for _ in 1 2 3 4 5 6 7 8; do
+        echo 'add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 counter accept'
+    done
+} > "$FRAGMENT"
+chown root:root "$FRAGMENT"
+chmod 644 "$FRAGMENT"
+
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session > /dev/null 2>&1; then
+    fail "10.16: open_session failed on placeholder-dense fragment (max_expand regression?)"
+fi
+
+# Confirm all eight rules were committed to the per-session chain.
+SESSION_CHAIN=$(nft list table inet authnft 2>/dev/null | \
+    awk '/chain session_/ {gsub(/[{} ]/,""); print $2; exit}')
+if [[ -z "$SESSION_CHAIN" ]]; then
+    fail "10.16: per-session chain not found after open_session"
+fi
+RULE_COUNT=$(nft list chain inet authnft "$SESSION_CHAIN" 2>/dev/null | \
+    grep -c 'socket cgroupv2')
+if [[ "$RULE_COUNT" -ne 8 ]]; then
+    fail "10.16: expected 8 substituted rules in $SESSION_CHAIN, found $RULE_COUNT"
+fi
+
+pamtester authnft_test "$TEST_USER" close_session > /dev/null 2>&1 || true
+nft delete table inet authnft 2>/dev/null || true
+pass "10.16: placeholder-dense fragment substituted and loaded ($RULE_COUNT rules)"
+
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"
