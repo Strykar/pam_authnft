@@ -9,8 +9,9 @@
  * The function has three subtle pieces:
  *   - state machine that tracks #-comments (reset on '\n') and "..." quotes
  *   - token-boundary check on the char after a placeholder
- *   - malloc with src_len*2+1 over-allocation budget; returns NULL if a
- *     replacement would exceed that
+ *   - malloc with src_len * ratio + 1 over-allocation budget, where
+ *     ratio = ceil(max_rep_len / min_ph_len) over the four placeholders.
+ *     Returns NULL if a replacement would exceed that.
  *
  * Compiled with -DFUZZ_BUILD so the static qualifier is removed from
  * substitute_placeholders in nft_handler.c.
@@ -23,8 +24,9 @@
  * placeholders would mostly miss the matcher.
  *
  * Property assertions (after every call):
- *   1. result == NULL  ||  strlen(result) <= src_len * 2
- *      (sizing-budget invariant)
+ *   1. result == NULL  ||  strlen(result) + 1 <= max_expand
+ *      (sizing-budget invariant; max_expand recomputed in-harness
+ *      to mirror substitute_placeholders independently)
  *   2. result reachable as a valid C string within the malloc'd region
  *      (implicit via strlen — ASan catches OOB read otherwise)
  *
@@ -85,12 +87,23 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
     if (out) {
         size_t out_len = strlen(out);
-        /* Sizing-budget invariant: max_expand = src_len*2+1, output fits
-         * within max_expand-1 NUL-terminated bytes. ASan would already
+        /* Mirror substitute_placeholders's max_expand independently so
+         * the assertion catches a regression where the implementation's
+         * bound and its runtime guards drift apart. ASan would already
          * catch a write past max_expand, but the explicit trap forces a
          * deterministic crash if the bound is somehow violated short of
          * an OOB write (e.g., uninitialized-byte interaction). */
-        if (out_len > src_len * 2)
+        size_t max_rep_len = 0, min_ph_len = SIZE_MAX;
+        for (int k = 0; k < 4; k++) {
+            size_t plen = strlen(PLACEHOLDERS[k]);
+            size_t rlen = strlen(replacements[k]);
+            if (rlen > max_rep_len) max_rep_len = rlen;
+            if (plen < min_ph_len)  min_ph_len  = plen;
+        }
+        size_t ratio = (max_rep_len + min_ph_len - 1) / min_ph_len;
+        if (ratio < 1) ratio = 1;
+        size_t max_expand = src_len * ratio + 1;
+        if (out_len + 1 > max_expand)
             __builtin_trap();
         free(out);
     }
