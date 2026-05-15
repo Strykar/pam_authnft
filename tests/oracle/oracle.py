@@ -79,7 +79,7 @@ def normalize_ip(s: str):
     # then AF_INET6). Python's ipaddress doesn't have a "try ipv4
     # only" mode, but ipv4 addresses also parse as ipv4.
     try:
-        a4 = ipaddress.IPv4Address(core)
+        ipaddress.IPv4Address(core)
         # IPv4 path: return the input form verbatim (no canonicalization).
         return core
     except ValueError:
