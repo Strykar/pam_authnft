@@ -223,30 +223,6 @@ int session_file_write(pam_handle_t *pamh, const authnft_session_t *sd,
 int session_file_remove(pam_handle_t *pamh, const char *scope_unit);
 
 /*
- * session_carry_encode / session_carry_decode:
- * Serialize/deserialize authnft_session_t into a flat JSON object suitable
- * for transport via pam_putenv("AUTHNFT_SESSION=<json>"). Used to survive
- * the privsep monitor/child boundary in OpenSSH (pam_open_session in the
- * privsep child, pam_close_session in the monitor); pam_set_data does not
- * cross that boundary, but PAM env does (sshd's import_environments(3)
- * proxies env across the fork). See issue #35 for the source-level walk.
- *
- * Encode: returns the number of bytes written (excluding NUL), or -1 on
- *   overflow/error. A 1024-byte buffer is sufficient.
- * Decode: returns 0 on success, -1 on schema mismatch or malformed input.
- *   The caller MUST re-validate every populated field through its existing
- *   validator (charset, length, IP normalization, depth invariant) before
- *   acting on the decoded struct. The carry crosses a process boundary;
- *   treat its content the same as any external input.
- *
- * The carry schema is INTERNAL to pam_authnft; it is not the same
- * contract as the public /run/authnft/sessions/<scope>.json schema
- * (INTEGRATIONS.txt §5.6, schema v=2).
- */
-int session_carry_encode(const authnft_session_t *sd, char *out, size_t out_sz);
-int session_carry_decode(const char *json, authnft_session_t *sd);
-
-/*
  * event_correlation_capture:
  * Populates `out` with a correlation token usable to join open and close
  * audit events for the same session. If PAM env "AUTHNFT_CORRELATION" is
