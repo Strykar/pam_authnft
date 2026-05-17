@@ -39,7 +39,6 @@ OBJS = $(OBJ_DIR)/audit.o         \
        $(OBJ_DIR)/pam_entry.o     \
        $(OBJ_DIR)/peer_lookup.o   \
        $(OBJ_DIR)/sandbox.o       \
-       $(OBJ_DIR)/session_carry.o \
        $(OBJ_DIR)/session_file.o
 
 all: $(TARGET)

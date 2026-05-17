@@ -246,38 +246,6 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
     if (rc == PAM_SUCCESS) {
         (void)session_file_write(pamh, sd, user, session_pid);
         event_open_emit(pamh, sd, user, session_pid);
-
-        /*
-         * Carry session state through PAM env so close_session can find
-         * it even when it runs in a different process from open_session
-         * (OpenSSH privsep model — open in child, close in monitor;
-         * pam_set_data doesn't cross the fork). sd is fully populated
-         * by nft_handler_setup at this point — jump_handle in
-         * particular is only set after the jump rule is committed. See
-         * issue #35.
-         *
-         * Failure here is non-fatal. pam_set_data above is the
-         * primary channel for same-process PAM stacks (pamtester, su,
-         * systemd-logind console login); the env carry is the
-         * privsep-survival path. close_session will try env first then
-         * fall back to pam data.
-         */
-        char carry[1024];
-        int n = session_carry_encode(sd, carry, sizeof(carry));
-        if (n < 0) {
-            pam_syslog(pamh, LOG_WARNING,
-                       "authnft: session-carry encode overflowed; "
-                       "close_session may need pam_set_data fallback");
-        } else {
-            char buf[1024 + sizeof("AUTHNFT_SESSION=")];
-            int w = snprintf(buf, sizeof(buf), "AUTHNFT_SESSION=%s", carry);
-            if (w > 0 && (size_t)w < sizeof(buf)) {
-                if (pam_putenv(pamh, buf) != PAM_SUCCESS) {
-                    pam_syslog(pamh, LOG_WARNING,
-                               "authnft: pam_putenv(AUTHNFT_SESSION) failed");
-                }
-            }
-        }
     } else {
         /* nft_handler_setup rolled back its own partial nft state.
          * The systemd scope created by bus_handler_start above is
@@ -286,86 +254,6 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
         (void)bus_handler_stop(pamh, user, session_pid);
     }
     return rc;
-}
-
-/*
- * Re-validate a session struct that was decoded from external transport
- * (PAM env via session_carry_decode). Each populated field is checked
- * against the same validator that produced it on the open path. Returns
- * 0 if all populated fields pass, -1 otherwise. Empty fields (remote_ip,
- * claims_tag) pass implicitly because empty is a legitimate value.
- *
- * This is the trust boundary for the env-carry path. If a hostile or
- * buggy peer puts something in AUTHNFT_SESSION that doesn't pass these
- * checks, close_session must refuse to act on it rather than passing
- * malformed identifiers down to libnftables.
- */
-static int revalidate_session(const authnft_session_t *sd) {
-    if (!sd) return -1;
-
-    /* cg_path: must be "authnft.slice/<scope_unit>" — depth-1 invariant */
-    if (sd->cg_path[0] == '\0') return -1;
-    static const char prefix[] = "authnft.slice/";
-    if (strncmp(sd->cg_path, prefix, sizeof(prefix) - 1) != 0) return -1;
-    /* No further '/' beyond the one in the prefix (depth invariant). */
-    if (strchr(sd->cg_path + sizeof(prefix) - 1, '/')) return -1;
-
-    /* scope_unit: ASCII safe, ends in .scope */
-    size_t su_len = strlen(sd->scope_unit);
-    if (su_len == 0 || su_len < 6) return -1;
-    if (strcmp(sd->scope_unit + su_len - 6, ".scope") != 0) return -1;
-    for (size_t i = 0; i < su_len; i++) {
-        char c = sd->scope_unit[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'))
-            return -1;
-    }
-
-    /* remote_ip: empty (cg-only path) or a valid IP literal */
-    if (sd->remote_ip[0] != '\0') {
-        char tmp[IP_STR_MAX];
-        if (!util_normalize_ip(sd->remote_ip, tmp, sizeof(tmp))) return -1;
-        if (strcmp(tmp, sd->remote_ip) != 0) return -1;
-    }
-
-    /* claims_tag: charset already enforced upstream; recheck the safe set */
-    for (size_t i = 0; sd->claims_tag[i]; i++) {
-        char c = sd->claims_tag[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') ||
-              c == '_' || c == '=' || c == ',' || c == '.' ||
-              c == ':' || c == ';' || c == '/' || c == '-'))
-            return -1;
-    }
-
-    /* correlation_id: charset [A-Za-z0-9_.:-] */
-    for (size_t i = 0; sd->correlation_id[i]; i++) {
-        char c = sd->correlation_id[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') ||
-              c == '_' || c == '-' || c == '.' || c == ':'))
-            return -1;
-    }
-
-    /* chain_name and per-session set names: nft identifier rules
-     * (alnum + underscore). Builder uses "session_<safe_user>_<pid>"
-     * shape; recheck the charset. */
-    const char *names[] = { sd->chain_name, sd->set_v4, sd->set_v6, sd->set_cg };
-    for (size_t k = 0; k < 4; k++) {
-        if (names[k][0] == '\0') return -1;
-        if (strncmp(names[k], "session_", 8) != 0) return -1;
-        for (size_t i = 0; names[k][i]; i++) {
-            char c = names[k][i];
-            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                  (c >= '0' && c <= '9') || c == '_'))
-                return -1;
-        }
-    }
-
-    /* jump_handle: 0 means "not captured" — refuse, since cleanup needs it */
-    if (sd->jump_handle == 0) return -1;
-
-    return 0;
 }
 
 PAM_EXTERN int pam_sm_close_session(pam_handle_t *pamh, int flags,
@@ -379,61 +267,17 @@ PAM_EXTERN int pam_sm_close_session(pam_handle_t *pamh, int flags,
     if (strcmp(user, "root") == 0)
         return PAM_SUCCESS;
 
-    /*
-     * Two-channel session-state lookup:
-     *
-     *   1. PAM env (AUTHNFT_SESSION) — survives the privsep monitor/
-     *      child boundary in OpenSSH. open_session ran in the privsep
-     *      child and called pam_putenv; sshd's import_environments(3)
-     *      proxied the env across the fork to the monitor where
-     *      close_session runs. See issue #35 and src/session_carry.c.
-     *
-     *   2. pam_set_data ("authnft_cg_id") — same-process fallback. Used
-     *      by pamtester, su, systemd-logind console login, and any PAM
-     *      stack where open and close run in the same address space.
-     *
-     * Try env first; if it parses and passes re-validation, use it.
-     * Fall back to pam_data otherwise. Warn-and-skip only if both fail.
-     *
-     * Re-validate env-decoded fields before use: the env crosses a
-     * process boundary, so its content is treated as external input.
-     */
-    authnft_session_t carry = {0};
     const authnft_session_t *sd = NULL;
-    int from_env = 0;
-
-    const char *env_json = pam_getenv(pamh, "AUTHNFT_SESSION");
-    if (env_json && env_json[0]) {
-        if (session_carry_decode(env_json, &carry) == 0 &&
-            revalidate_session(&carry) == 0) {
-            sd = &carry;
-            from_env = 1;
-            DEBUG_PRINT("PAM: close_session using env-carried sd");
-        } else {
-            pam_syslog(pamh, LOG_WARNING,
-                       "authnft: AUTHNFT_SESSION present but malformed; "
-                       "falling back to pam_set_data");
-        }
-    }
-
-    if (!sd) {
-        const authnft_session_t *pd = NULL;
-        if (pam_get_data(pamh, "authnft_cg_id",
-                         (const void **)&pd) == PAM_SUCCESS && pd) {
-            sd = pd;
-            DEBUG_PRINT("PAM: close_session using pam_data sd");
-        }
-    }
-
-    if (!sd) {
+    if (pam_get_data(pamh, "authnft_cg_id",
+                     (const void **)&sd) != PAM_SUCCESS || !sd) {
         pam_syslog(pamh, LOG_WARNING,
-                   "authnft: no stored session data for %s — element may persist "
-                   "(issue #35: privsep close_session leak)", user);
+                   "authnft: no stored session data for %s — element may persist",
+                   user);
         return PAM_SUCCESS;
     }
 
-    DEBUG_PRINT("PAM: close_session for user=%s chain=%s handle=%" PRIu64 " src=%s",
-                user, sd->chain_name, sd->jump_handle, from_env ? "env" : "pam_data");
+    DEBUG_PRINT("PAM: close_session for user=%s chain=%s handle=%" PRIu64,
+                user, sd->chain_name, sd->jump_handle);
 
     if (nft_handler_cleanup(pamh, user, sd) != PAM_SUCCESS)
         pam_syslog(pamh, LOG_WARNING,
@@ -441,9 +285,6 @@ PAM_EXTERN int pam_sm_close_session(pam_handle_t *pamh, int flags,
 
     (void)session_file_remove(pamh, sd->scope_unit);
     event_close_emit(pamh, sd, user);
-
-    /* Clear the env carry so a subsequent stage can't pick up stale state. */
-    if (from_env) (void)pam_putenv(pamh, "AUTHNFT_SESSION");
 
     return PAM_SUCCESS;
 }

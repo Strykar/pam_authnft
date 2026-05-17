@@ -601,19 +601,22 @@ fi
 pass "10.14: failed open_session rolled back nft state and scope cleanly"
 nft delete table inet authnft 2>/dev/null || true
 
-# 10.15: Privsep close_session boundary — the regression test for issue #35.
-# pamtester is single-process, so 10.2/10.6/10.14 cannot exercise the
-# OpenSSH privsep model (open_session in the privsep child, close_session
-# in the monitor). This stage drives a real sshd loopback session and
-# asserts the per-session nft state and the systemd transient scope are
-# both absent after the client disconnects.
+# 10.15: real sshd loopback coverage. pamtester is single-process, so
+# 10.2/10.6/10.14 cannot exercise an actual sshd session lifecycle.
+# This stage drives a real sshd loopback session and asserts the
+# per-session nft state and the systemd transient scope are both absent
+# after the client disconnects.
 #
-# Without the AUTHNFT_SESSION env carry, this test fails: pam_set_data
-# from the child is invisible to the monitor, the close-side fallback
-# returns PAM_SUCCESS without cleaning up, and the chain/sets/scope leak
-# until the 24h timeout. With the carry, close_session decodes the env,
-# re-validates fields, and runs cleanup against the same state the open
-# created.
+# Historical note: this stage was added under the (incorrect) hypothesis
+# that pam_open_session and pam_close_session ran in different processes
+# under sshd's privsep model. In current OpenSSH (sshd-session.c at
+# V_10_3_P1, do_pam_session called at line 1280 before privsep_postauth
+# at line 1288), both run in the monitor — the same process. The
+# pam_set_data path is sufficient; the env carry that originally
+# motivated this stage has been removed. The test still earns its keep
+# as the only stage that drives real sshd through the project, so a
+# future regression that breaks cleanup specifically under sshd (rather
+# than under pamtester) would still surface here.
 nft delete table inet authnft 2>/dev/null || true
 printf "${YELLOW}10.15: Privsep close_session boundary (real sshd loopback)${RESET}\n"
 
