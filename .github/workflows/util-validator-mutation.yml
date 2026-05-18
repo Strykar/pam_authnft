@@ -70,8 +70,18 @@ jobs:
           UBSAN_OPTIONS: "halt_on_error=0:print_stacktrace=1:print_summary=1"
         run: |
           set +e
+          # --minimum-timeout: mull's default per-mutant timeout is
+          # max(baseline*10, default-min). Under ASan, a mutation that
+          # trips heap-buffer-overflow detection causes 300-400ms of
+          # stack-symbolisation + abort overhead, which exceeds the
+          # default. The PR #50 first run had 4 mutants legitimately
+          # killed by ASan but classified as Timedout (status=3)
+          # because the ASan abort path overran the timeout. 5000ms
+          # gives ASan room without slowing happy-path mutants
+          # (single-digit ms regardless). Documented in PR #51.
           "mull-runner-${MULL_LLVM_MAJOR}" \
               --ide-reporter-show-killed \
+              --minimum-timeout 5000 \
               --reporters IDE --reporters SQLite \
               --report-dir . \
               --report-name util-validator-mutation \
