@@ -27,15 +27,17 @@ CFLAGS_BASE  = -fPIC -Wall -Wextra -O2 -Iinclude -D_GNU_SOURCE $(HARDENING)
 LDFLAGS_BASE = -Wl,-z,relro,-z,now
 SO_LDFLAGS   = $(LDFLAGS_BASE) -shared -Wl,--version-script=pam_authnft.map
 
-TARGET   = pam_authnft.so
-TEST_BIN = authnft_test
-OBJ_DIR  = obj
+TARGET         = pam_authnft.so
+TEST_BIN       = authnft_test
+TEST_VALIDATOR = test_nft_validator
+OBJ_DIR        = obj
 
 OBJS = $(OBJ_DIR)/audit.o         \
        $(OBJ_DIR)/bus_handler.o   \
        $(OBJ_DIR)/event.o         \
        $(OBJ_DIR)/keyring.o       \
        $(OBJ_DIR)/nft_handler.o   \
+       $(OBJ_DIR)/nft_validator.o \
        $(OBJ_DIR)/pam_entry.o     \
        $(OBJ_DIR)/peer_lookup.o   \
        $(OBJ_DIR)/sandbox.o       \
@@ -58,7 +60,8 @@ $(TARGET): $(OBJS)
 # Includes the differential-oracle harness (Phase 4.1 of the security plan)
 # which cross-validates the small parsers against an independent Python
 # implementation. Catches logic bugs that ASan-class fuzzing cannot find.
-test: test-symbols test-oracle $(TEST_BIN)
+test: test-symbols test-oracle $(TEST_BIN) $(TEST_VALIDATOR)
+	./$(TEST_VALIDATOR)
 	./$(TEST_BIN)
 
 # Invariant guard #7: exported symbols must be exactly the two PAM entry points.
@@ -117,6 +120,19 @@ $(TEST_BIN): $(TARGET)
 	$(CC) $(CFLAGS_BASE) $(LDFLAGS_BASE) -g -O1 \
 	    tests/test_suite.c $(OBJS) -o $(TEST_BIN) \
 	    `$(PKG_CONFIG) --libs $(LIBS)`
+
+# Unit-test binary for the pure decision surfaces in src/nft_validator.c.
+# Built under -fsanitize=address,undefined so mull-mutated under-allocation
+# bugs in substitute_placeholders surface as ASan heap-buffer-overflow
+# rather than silent survival. ASan-coupling is intentional and required
+# for the test design to detect the failure modes it claims to detect.
+# Empirical basis for the one-binary compose: see
+# docs/MUTATION_ASAN_EXPERIMENT.md.
+$(TEST_VALIDATOR): tests/test_nft_validator.c src/nft_validator.c include/nft_validator.h include/authnft.h
+	$(CC) -Wall -Wextra -O0 -g -Iinclude \
+	    -fsanitize=address,undefined -fno-omit-frame-pointer \
+	    tests/test_nft_validator.c src/nft_validator.c \
+	    -o $@ -lpam
 
 # Integration tests — requires root (pamtester, nftables, systemd, valgrind).
 # Runs the full session open/close cycle against the live system.
@@ -304,6 +320,23 @@ $(OBJ_DIR)/test_suite.mull.o: tests/test_suite.c include/authnft.h | .mull-prefl
 $(TEST_BIN).mull: $(MULL_OBJS)
 	$(MULL_CLANG) $^ -o $@ `$(PKG_CONFIG) --libs $(LIBS)`
 
+# Mull + ASan instrumented validator-test binary for the validator-
+# mutation workflow. Sources are tests/test_nft_validator.c plus
+# src/nft_validator.c; the existing $(OBJ_DIR)/%.mull.o: src/%.c
+# pattern already produces $(OBJ_DIR)/nft_validator.mull.o, so this
+# only adds a specific rule for the tests/ source plus a link step.
+# ASan+UBSan flags travel through MULL_EXTRA_CFLAGS; the workflow
+# sets that variable from env. See docs/MUTATION_ASAN_EXPERIMENT.md
+# for the one-binary compose's empirical justification.
+$(OBJ_DIR)/test_nft_validator.mull.o: tests/test_nft_validator.c include/nft_validator.h include/authnft.h | .mull-preflight
+	@mkdir -p $(OBJ_DIR)
+	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) $(MULL_EXTRA_CFLAGS) \
+	    -g -grecord-command-line -O0 -Iinclude \
+	    -c $< -o $@
+
+$(TEST_VALIDATOR).mull: $(OBJ_DIR)/test_nft_validator.mull.o $(OBJ_DIR)/nft_validator.mull.o
+	$(MULL_CLANG) $(MULL_EXTRA_CFLAGS) $^ -o $@ -lpam
+
 install: $(TARGET) install-tmpfiles
 	sudo mkdir -p /etc/authnft/users
 	sudo install -m 755 $(TARGET) $(PAM_DIR)/$(TARGET)
@@ -483,7 +516,7 @@ fuzz-coverage:
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
 clean:
-	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
+	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
 
 distclean: clean
 	@if sudo nft list tables 2>/dev/null | grep -q "inet authnft"; then \
