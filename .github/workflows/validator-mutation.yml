@@ -1,0 +1,117 @@
+name: validator-mutation
+# Mutation testing for the pure validator surfaces (src/nft_validator.c),
+# triggered per-PR rather than weekly because the binary is small and
+# runs in seconds. Complements the broader weekly mutation.yml workflow
+# which targets authnft_test (the full integration-style test binary).
+#
+# The test binary is built with BOTH mull's IR-frontend pass plugin AND
+# -fsanitize=address,undefined in a single clang-19 invocation. The
+# one-binary compose is empirically validated in
+# docs/MUTATION_ASAN_EXPERIMENT.md — the validator binary installs no
+# seccomp filter, which is the load-bearing precondition for compose.
+#
+# Path filter scope: only sources whose behaviour changes could shift
+# mutation outcomes. The workflow file itself is included so that
+# mull/clang version bumps or compose flag changes also trigger.
+on:
+  pull_request:
+    paths:
+      - 'src/nft_validator.c'
+      - 'include/nft_validator.h'
+      - 'tests/test_nft_validator.c'
+      - 'Makefile'
+      - 'mull.yml'
+      - '.github/workflows/validator-mutation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MULL_LLVM_MAJOR: '19'
+
+jobs:
+  validator-mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libpam0g-dev curl gnupg ca-certificates
+
+      - name: Install mull and matching clang
+        run: |
+          # Same provenance pattern as mutation.yml: pinned URL, length
+          # bound on the bootstrap script, sudo -E so proxy env vars
+          # propagate.
+          curl -1sLf "https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh" \
+              -o /tmp/mull-repo.sh
+          test "$(wc -l < /tmp/mull-repo.sh)" -lt 1000
+          sudo -E bash /tmp/mull-repo.sh
+          sudo apt-get install -y \
+              "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
+          "mull-runner-${MULL_LLVM_MAJOR}" --version
+
+      - name: Build mull + ASan validator test binary
+        env:
+          MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+        run: make test_nft_validator.mull
+
+      - name: Run mull-runner
+        id: mull
+        env:
+          ASAN_OPTIONS: "abort_on_error=0:halt_on_error=0:print_summary=1"
+          UBSAN_OPTIONS: "halt_on_error=0:print_stacktrace=1:print_summary=1"
+        run: |
+          set +e
+          "mull-runner-${MULL_LLVM_MAJOR}" \
+              --ide-reporter-show-killed \
+              --reporters IDE --reporters SQLite \
+              --report-dir . \
+              --report-name validator-mutation \
+              ./test_nft_validator.mull > mutation-report.txt 2>&1
+          ec=$?
+          set -e
+          echo "exit=$ec" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Validator mutation report"
+            echo
+            echo '```'
+            tail -200 mutation-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check for sanitiser-attributable kills
+        if: always()
+        run: |
+          # Mode-B detection per the experiment doc: any Crashed
+          # (status=4) mutant is a sanitiser-attributable false-positive
+          # kill, not an assertion-driven kill. The stub-validator beta
+          # run showed 0 Crashed; this workflow's binary should too.
+          if [ ! -f validator-mutation.sqlite ]; then
+            echo "::error::validator-mutation.sqlite missing — mull-runner did not complete"
+            exit 1
+          fi
+          crashed=$(sqlite3 validator-mutation.sqlite \
+              "SELECT COUNT(*) FROM mutant WHERE execution_status = 4;")
+          echo "Crashed mutant count: $crashed"
+          if [ "$crashed" -ne 0 ]; then
+            echo "::warning::$crashed Crashed mutants — sanitiser-attributable, investigate"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: validator-mutation-report
+          path: |
+            mutation-report.txt
+            validator-mutation*.sqlite
+            validator-mutation*.txt
+          retention-days: 30
+          if-no-files-found: warn
