@@ -36,9 +36,17 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # Parity with validator-mutation.yml from #49: install the
+          # full library-dev cluster authnft.h's transitive includes
+          # pull in (pam, nftables, seccomp, systemd, cap, audit).
+          # The validator binary itself doesn't link against most of
+          # these, but the headers are required at compile time.
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config curl gnupg ca-certificates
+            pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev \
+            libpam0g-dev libcap-dev libaudit-dev \
+            curl gnupg ca-certificates
 
       - name: Install mull and matching clang
         run: |
