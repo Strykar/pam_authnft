@@ -1,0 +1,14 @@
+# mull mutation testing config. Reference:
+# https://mull-project.com/reference/yaml-config/
+#
+# Only one knob here for now: exclude tests/ from mutation. The
+# test suite is mull's oracle, so mutations inside the suite
+# itself cannot be killed by the suite and would all "survive",
+# dragging the score down without saying anything about src/
+# coverage. The MULL_OBJS list in the Makefile compiles
+# tests/test_suite.c as one of the .mull.o inputs precisely so it
+# can drive the runtime under mutation — but the mutations
+# embedded into that TU should be filtered before mull-runner
+# considers them.
+excludePaths:
+  - tests/.*
