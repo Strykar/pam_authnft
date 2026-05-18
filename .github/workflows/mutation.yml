@@ -20,9 +20,9 @@ permissions:
 
 env:
   # Pin to a specific mull / LLVM major. Bump when a new release is
-  # tested; we don't want a Saturday-night PackageCloud update to
+  # tested; we don't want a Saturday-night Cloudsmith update to
   # silently break the workflow.
-  MULL_LLVM_MAJOR: '17'
+  MULL_LLVM_MAJOR: '19'
 
 jobs:
   mutation:
@@ -41,17 +41,18 @@ jobs:
             libpam0g-dev libcap-dev libaudit-dev \
             curl gnupg ca-certificates
 
-      - name: Install mull from upstream PackageCloud
+      - name: Install mull from upstream Cloudsmith
         run: |
           # Pin to the specific release URL; do not run a curl|sh
-          # bootstrap. https://app.packagecloud.io/mull-project/mull-stable
-          curl -fsSL "https://packagecloud.io/install/repositories/mull-project/mull-stable/script.deb.sh" \
+          # bootstrap. https://cloudsmith.io/~mull-project/repos/mull-stable
+          curl -1sLf "https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh" \
               -o /tmp/mull-repo.sh
           # Quick provenance check on the script before sourcing —
           # it's third-party content. Length-bounded sanity check;
-          # the full audit is on the user.
-          test "$(wc -l < /tmp/mull-repo.sh)" -lt 200
-          sudo bash /tmp/mull-repo.sh
+          # the full audit is on the user. Script is ~580 lines as
+          # of May 2026; cap at 1000 to catch a runaway swap-out.
+          test "$(wc -l < /tmp/mull-repo.sh)" -lt 1000
+          sudo -E bash /tmp/mull-repo.sh
           # The mull-${MAJOR} package brings clang-${MAJOR} as a
           # versioned dep (mull is built against that exact LLVM).
           sudo apt-get install -y "mull-${MULL_LLVM_MAJOR}"
