@@ -1,0 +1,131 @@
+name: experiment-compose-suppression
+# Throwaway workflow for the mull+ASan stack-instrumentation
+# suppression investigation. Runs on the
+# experiment/mull-asan-compose-suppression branch only; deleted
+# with the branch after the investigation's writeup commits to
+# main (docs/MUTATION_ASAN_INVESTIGATION_2.md).
+#
+# Per-run variables (pass-plugin CLI order, heap vs stack,
+# sanitiser flags, optimisation level, mutator filter) change
+# between commits on the experiment branch rather than via
+# workflow_dispatch inputs — keeps each run a one-line commit
+# diff and an auditable git log.
+#
+# Build is inline rather than Makefile-target-based because the
+# stub binary is throwaway; adding a target would land on main
+# via the wrong path.
+on:
+  push:
+    branches:
+      - experiment/mull-asan-compose-suppression
+    paths:
+      - 'experiment/stub_compose_suppression.c'
+      - 'experiment/test_compose_suppression.c'
+      - '.github/workflows/experiment-compose-suppression.yml'
+      - 'mull.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MULL_LLVM_MAJOR: '19'
+
+jobs:
+  experiment-compose-suppression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl gnupg ca-certificates
+
+      - name: Install mull and matching clang
+        run: |
+          curl -1sLf "https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh" \
+              -o /tmp/mull-repo.sh
+          test "$(wc -l < /tmp/mull-repo.sh)" -lt 1000
+          sudo -E bash /tmp/mull-repo.sh
+          sudo apt-get install -y \
+              "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
+          "mull-runner-${MULL_LLVM_MAJOR}" --version
+
+      - name: Build stub_compose_suppression.mull (mull + ASan + UBSan, mull-first CLI order)
+        run: |
+          # Run 1 baseline: faithful stub, both sanitisers, mull pass
+          # plugin BEFORE -fsanitize on the CLI. Subsequent runs
+          # modify these flags via commit-per-run; the baseline
+          # configuration matches util-validator-mutation.yml's
+          # actual production flags.
+          "clang-${MULL_LLVM_MAJOR}" \
+              -fpass-plugin=/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR} \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -g -grecord-command-line -O0 \
+              experiment/stub_compose_suppression.c \
+              experiment/test_compose_suppression.c \
+              -o stub_compose_suppression.mull
+
+      - name: Run mull-runner
+        id: mull
+        env:
+          ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:print_summary=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1:print_summary=1"
+        run: |
+          set +e
+          "mull-runner-${MULL_LLVM_MAJOR}" \
+              --ide-reporter-show-killed \
+              --minimum-timeout 5000 \
+              --reporters IDE --reporters SQLite \
+              --report-dir . \
+              --report-name compose-suppression \
+              ./stub_compose_suppression.mull > mutation-report.txt 2>&1
+          ec=$?
+          set -e
+          echo "exit=$ec" >> "$GITHUB_OUTPUT"
+          {
+            echo "## compose-suppression mutation report"
+            echo
+            echo '```'
+            tail -200 mutation-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Query SQLite — survivors, crashes, mutator distribution
+        if: always()
+        run: |
+          if [ ! -f compose-suppression.sqlite ]; then
+            echo "::error::compose-suppression.sqlite missing"
+            exit 1
+          fi
+          echo "=== status distribution ==="
+          sqlite3 compose-suppression.sqlite \
+            "SELECT execution_status, COUNT(*) FROM mutant GROUP BY execution_status ORDER BY execution_status;"
+          echo
+          echo "=== survivors (status=2): mutator, line, column ==="
+          sqlite3 compose-suppression.sqlite \
+            "SELECT mutator, line_number, column_number, mutation_replacement FROM mutant WHERE execution_status = 2;"
+          echo
+          echo "=== crashed (status=4): mutator, line, column ==="
+          sqlite3 compose-suppression.sqlite \
+            "SELECT mutator, line_number, column_number, mutation_replacement FROM mutant WHERE execution_status = 4;"
+          echo
+          echo "=== ALL mutants for reference ==="
+          sqlite3 compose-suppression.sqlite \
+            "SELECT execution_status, mutator, line_number, column_number FROM mutant ORDER BY line_number, column_number;"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: compose-suppression-report
+          path: |
+            mutation-report.txt
+            compose-suppression*.sqlite
+            compose-suppression*.txt
+          retention-days: 30
+          if-no-files-found: warn
