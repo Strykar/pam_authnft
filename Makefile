@@ -27,21 +27,23 @@ CFLAGS_BASE  = -fPIC -Wall -Wextra -O2 -Iinclude -D_GNU_SOURCE $(HARDENING)
 LDFLAGS_BASE = -Wl,-z,relro,-z,now
 SO_LDFLAGS   = $(LDFLAGS_BASE) -shared -Wl,--version-script=pam_authnft.map
 
-TARGET         = pam_authnft.so
-TEST_BIN       = authnft_test
-TEST_VALIDATOR = test_nft_validator
-OBJ_DIR        = obj
+TARGET              = pam_authnft.so
+TEST_BIN            = authnft_test
+TEST_VALIDATOR      = test_nft_validator
+TEST_UTIL_VALIDATOR = test_util_validators
+OBJ_DIR             = obj
 
-OBJS = $(OBJ_DIR)/audit.o         \
-       $(OBJ_DIR)/bus_handler.o   \
-       $(OBJ_DIR)/event.o         \
-       $(OBJ_DIR)/keyring.o       \
-       $(OBJ_DIR)/nft_handler.o   \
-       $(OBJ_DIR)/nft_validator.o \
-       $(OBJ_DIR)/pam_entry.o     \
-       $(OBJ_DIR)/peer_lookup.o   \
-       $(OBJ_DIR)/sandbox.o       \
-       $(OBJ_DIR)/session_file.o
+OBJS = $(OBJ_DIR)/audit.o           \
+       $(OBJ_DIR)/bus_handler.o     \
+       $(OBJ_DIR)/event.o           \
+       $(OBJ_DIR)/keyring.o         \
+       $(OBJ_DIR)/nft_handler.o     \
+       $(OBJ_DIR)/nft_validator.o   \
+       $(OBJ_DIR)/pam_entry.o       \
+       $(OBJ_DIR)/peer_lookup.o     \
+       $(OBJ_DIR)/sandbox.o         \
+       $(OBJ_DIR)/session_file.o    \
+       $(OBJ_DIR)/util_validators.o
 
 all: $(TARGET)
 
@@ -60,8 +62,9 @@ $(TARGET): $(OBJS)
 # Includes the differential-oracle harness (Phase 4.1 of the security plan)
 # which cross-validates the small parsers against an independent Python
 # implementation. Catches logic bugs that ASan-class fuzzing cannot find.
-test: test-symbols test-oracle $(TEST_BIN) $(TEST_VALIDATOR)
+test: test-symbols test-oracle $(TEST_BIN) $(TEST_VALIDATOR) $(TEST_UTIL_VALIDATOR)
 	./$(TEST_VALIDATOR)
+	./$(TEST_UTIL_VALIDATOR)
 	./$(TEST_BIN)
 
 # Invariant guard #7: exported symbols must be exactly the two PAM entry points.
@@ -133,6 +136,18 @@ $(TEST_VALIDATOR): tests/test_nft_validator.c src/nft_validator.c include/nft_va
 	    -fsanitize=address,undefined -fno-omit-frame-pointer \
 	    tests/test_nft_validator.c src/nft_validator.c \
 	    -o $@ -lpam
+
+# Unit-test binary for the pure decision surfaces in src/util_validators.c.
+# Same ASan-coupling rationale as $(TEST_VALIDATOR) — util_normalize_ip's
+# rejection-on-insufficient-size path has a mull-killable boundary check
+# (`core_len >= out_sz`) whose mutation is detectable only under ASan
+# (a planted-buffer-size test overflows by one byte if the rejection
+# slips). Pattern inherited from #49; see docs/MUTATION_ASAN_EXPERIMENT.md.
+$(TEST_UTIL_VALIDATOR): tests/test_util_validators.c src/util_validators.c include/util_validators.h include/authnft.h
+	$(CC) -Wall -Wextra -O0 -g -Iinclude \
+	    -fsanitize=address,undefined -fno-omit-frame-pointer \
+	    tests/test_util_validators.c src/util_validators.c \
+	    -o $@
 
 # Integration tests — requires root (pamtester, nftables, systemd, valgrind).
 # Runs the full session open/close cycle against the live system.
@@ -337,6 +352,18 @@ $(OBJ_DIR)/test_nft_validator.mull.o: tests/test_nft_validator.c include/nft_val
 $(TEST_VALIDATOR).mull: $(OBJ_DIR)/test_nft_validator.mull.o $(OBJ_DIR)/nft_validator.mull.o
 	$(MULL_CLANG) $(MULL_EXTRA_CFLAGS) $^ -o $@ -lpam
 
+# Mull + ASan instrumented util-validator test binary. Same pattern as
+# $(TEST_VALIDATOR).mull above; the existing $(OBJ_DIR)/%.mull.o: src/%.c
+# pattern produces $(OBJ_DIR)/util_validators.mull.o automatically.
+$(OBJ_DIR)/test_util_validators.mull.o: tests/test_util_validators.c include/util_validators.h include/authnft.h | .mull-preflight
+	@mkdir -p $(OBJ_DIR)
+	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) $(MULL_EXTRA_CFLAGS) \
+	    -g -grecord-command-line -O0 -Iinclude \
+	    -c $< -o $@
+
+$(TEST_UTIL_VALIDATOR).mull: $(OBJ_DIR)/test_util_validators.mull.o $(OBJ_DIR)/util_validators.mull.o
+	$(MULL_CLANG) $(MULL_EXTRA_CFLAGS) $^ -o $@
+
 install: $(TARGET) install-tmpfiles
 	sudo mkdir -p /etc/authnft/users
 	sudo install -m 755 $(TARGET) $(PAM_DIR)/$(TARGET)
@@ -516,7 +543,7 @@ fuzz-coverage:
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
 clean:
-	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
+	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
 
 distclean: clean
 	@if sudo nft list tables 2>/dev/null | grep -q "inet authnft"; then \

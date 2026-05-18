@@ -2,6 +2,7 @@
 // Copyright (C) 2025 Avinash H. Duduskar
 
 #include "authnft.h"
+#include "util_validators.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <inttypes.h>
@@ -28,56 +29,10 @@ static int is_debug_bypass_requested(int argc, const char **argv) {
     return 0;
 }
 
-int util_is_valid_username(const char *user) {
-    if (!user || *user == '\0') return 0;
-    size_t len = strlen(user);
-    if (len > MAX_USER_LEN || user[0] == '-' || user[0] == '.') return 0;
-    for (size_t i = 0; i < len; i++) {
-        if (!isalnum((unsigned char)user[i]) &&
-            user[i] != '-' && user[i] != '_' && user[i] != '.')
-            return 0;
-    }
-    return 1;
-}
-
-int util_normalize_ip(const char *in, char *out, size_t out_sz) {
-    if (!in || !out || out_sz == 0) return 0;
-    unsigned char addr_buf[sizeof(struct in6_addr)];
-
-    /* Strip an IPv6 zone suffix ("fe80::1%eth0" -> "fe80::1"). nftables
-     * ip6 saddr does not accept zone identifiers; the zone is meaningful
-     * only to the host's socket layer, and discarding it here lets the
-     * kernel's normal scope rules handle routing. */
-    const char *pct = strchr(in, '%');
-    size_t core_len = pct ? (size_t)(pct - in) : strlen(in);
-    if (core_len == 0 || core_len >= out_sz) return 0;
-
-    char core[IP_STR_MAX];
-    if (core_len >= sizeof(core)) return 0;
-    memcpy(core, in, core_len);
-    core[core_len] = '\0';
-
-    if (inet_pton(AF_INET, core, addr_buf) == 1) {
-        memcpy(out, core, core_len + 1);
-        return 1;
-    }
-
-    if (inet_pton(AF_INET6, core, addr_buf) == 1) {
-        /* v4-mapped v6 (::ffff:a.b.c.d) → extract as plain IPv4 so the
-         * element lands in the per-session IPv4 set rather than the IPv6 set.
-         * Common when sshd listens on :: with IPV6_V6ONLY=0. */
-        const struct in6_addr *a6 = (const struct in6_addr *)addr_buf;
-        if (IN6_IS_ADDR_V4MAPPED(a6)) {
-            if (!inet_ntop(AF_INET, &a6->s6_addr[12], out, (socklen_t)out_sz))
-                return 0;
-            return 1;
-        }
-        memcpy(out, core, core_len + 1);
-        return 1;
-    }
-
-    return 0;
-}
+/* util_is_valid_username and util_normalize_ip live in
+ * src/util_validators.c; declarations in util_validators.h. The
+ * extraction is the precondition for unit + mutation testing of
+ * the pure decision surfaces. See docs/MUTATION_ASAN_EXPERIMENT.md. */
 
 PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
                                     int argc, const char **argv) {

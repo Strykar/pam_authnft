@@ -17,12 +17,11 @@
  */
 
 #include "authnft.h"
+#include "util_validators.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-int validate_cgroup_path(const char *cgroup_path, char *out, size_t out_sz);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (size == 0 || size > 1024) return 0;
