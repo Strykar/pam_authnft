@@ -66,8 +66,26 @@ jobs:
       - name: Run mull-runner
         id: mull
         env:
-          ASAN_OPTIONS: "abort_on_error=0:halt_on_error=0:print_summary=1"
-          UBSAN_OPTIONS: "halt_on_error=0:print_stacktrace=1:print_summary=1"
+          # halt_on_error=1: mull runs each mutant in a separate
+          # subprocess. We want a mutant that trips ASan/UBSan to
+          # cause THAT subprocess to abort with non-zero exit, so
+          # mull-runner classifies it as killed (status=1). The
+          # opposite setting (halt_on_error=0) lets the subprocess
+          # continue past the bad write and reach the test's
+          # assertion check — which may pass anyway if the function
+          # returns the expected value via a different code path,
+          # leaving the OOB write as a survived mutant. Observed on
+          # PR #50 first run: line-55 mutant in util_normalize_ip
+          # writes core[64]='\0', test still passes EXPECT_EQ_INT(rc,0)
+          # because inet_pton rejects the 64-x input, mutant marked
+          # Passed despite the OOB write. halt_on_error=1 fixes that.
+          #
+          # The seccomp-warmup-failure mode that motivated
+          # halt_on_error=0 in docs/MUTATION_ASAN_EXPERIMENT.md does
+          # not apply to the validator binaries — they install no
+          # seccomp filter, so ASan's runtime can't trip the warmup.
+          ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:print_summary=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1:print_summary=1"
         run: |
           set +e
           # --minimum-timeout: mull's default per-mutant timeout is
