@@ -233,40 +233,52 @@ reproducibility-check:
 #   - dead code:   the line has no observable effect
 #
 # Mull operates by embedding LLVM bitcode into the test binary at
-# compile time (via -fpass-plugin=$(mull --print-pass-plugin-path))
-# and then mutating that bitcode in-process at run time. Each
-# mutation re-runs the binary; mull tallies kills and survivors.
+# compile time (via a clang pass plugin shipped as
+# /usr/lib/mull-ir-frontend-N) and then mutating that bitcode in-
+# process at run time. Each mutation re-runs the binary; mull
+# tallies kills and survivors.
 #
-# Requires: mull (mull-runner, mull-cxx) and a matching clang.
+# Requires: mull-N (provides mull-runner-N and the IR-frontend
+# plugin) and a matching clang-N. mull's deb depends on
+# libclang/libllvm only — install clang-N separately.
 # Install:
-#   Debian/Ubuntu: https://app.packagecloud.io/mull-project/mull-stable
-#   Arch:          AUR `mull` or `mull-bin`
+#   Debian/Ubuntu: https://cloudsmith.io/~mull-project/repos/mull-stable
+#                  plus `apt-get install clang-N`
+#   Arch:          AUR `mull` or `mull-bin` plus `pacman -S clang`
 #
-# The CI workflow .github/workflows/mutation.yml installs mull from
-# the project's PackageCloud DEB repo and runs this target weekly.
-MULL_CXX    ?= mull-cxx
-MULL_RUNNER ?= mull-runner
+# The CI workflow .github/workflows/mutation.yml installs both
+# packages from Cloudsmith / Ubuntu and runs this target weekly.
+MULL_LLVM_MAJOR  ?= 19
+MULL_RUNNER      ?= mull-runner-$(MULL_LLVM_MAJOR)
+MULL_CLANG       ?= clang-$(MULL_LLVM_MAJOR)
+MULL_IR_FRONTEND ?= /usr/lib/mull-ir-frontend-$(MULL_LLVM_MAJOR)
 
 mutation-report: $(TEST_BIN).mull
 	@command -v $(MULL_RUNNER) >/dev/null 2>&1 || { \
-	    echo "$(MULL_RUNNER) not in PATH — install mull first."; \
-	    echo "  Debian/Ubuntu: https://app.packagecloud.io/mull-project/mull-stable"; \
+	    echo "$(MULL_RUNNER) not in PATH — install mull-$(MULL_LLVM_MAJOR) first."; \
+	    echo "  Debian/Ubuntu: https://cloudsmith.io/~mull-project/repos/mull-stable"; \
 	    echo "  Arch:          AUR mull / mull-bin"; \
 	    exit 1; \
 	}
 	$(MULL_RUNNER) ./$(TEST_BIN).mull
 
-# Build the test binary using mull-cxx, the documented clang wrapper
-# that embeds LLVM bitcode and injects mull's pass plugin. Avoids
-# guessing the plugin path or wiring -fembed-bitcode-marker by hand
-# — mull-cxx handles the LLVM↔mull plumbing for the LLVM major it
-# was packaged against.
+# Build the test binary by passing mull's IR-frontend plugin to
+# clang directly. mull no longer ships a mull-cxx wrapper as of
+# 0.32.0; the documented invocation is `clang -fpass-plugin=
+# /usr/lib/mull-ir-frontend-N -g -grecord-command-line`. Debug
+# info is required so mull can map IR-level changes back to source.
 $(TEST_BIN).mull: tests/test_suite.c $(wildcard src/*.c) include/authnft.h
-	@command -v $(MULL_CXX) >/dev/null 2>&1 || { \
-	    echo "$(MULL_CXX) not in PATH — install mull first (see comment above)."; \
+	@command -v $(MULL_CLANG) >/dev/null 2>&1 || { \
+	    echo "$(MULL_CLANG) not in PATH — install clang-$(MULL_LLVM_MAJOR)."; \
 	    exit 1; \
 	}
-	$(MULL_CXX) $(CFLAGS_BASE) `$(PKG_CONFIG) --cflags $(LIBS)` -g -O0 \
+	@test -f $(MULL_IR_FRONTEND) || { \
+	    echo "$(MULL_IR_FRONTEND) missing — install mull-$(MULL_LLVM_MAJOR)."; \
+	    exit 1; \
+	}
+	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) \
+	    -g -grecord-command-line \
+	    $(CFLAGS_BASE) `$(PKG_CONFIG) --cflags $(LIBS)` -O0 \
 	    tests/test_suite.c $(wildcard src/*.c) -o $@ \
 	    `$(PKG_CONFIG) --libs $(LIBS)`
 
