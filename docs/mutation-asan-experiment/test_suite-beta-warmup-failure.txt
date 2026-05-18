@@ -1,0 +1,26 @@
+[info] Using config /home/runner/work/pam_authnft/pam_authnft/mull.yml
+[warning] Could not find dynamic library: libnftables.so.1
+[warning] Could not find dynamic library: libseccomp.so.2
+[warning] Could not find dynamic library: libsystemd.so.0
+[warning] Could not find dynamic library: libpam.so.0
+[warning] Could not find dynamic library: libcap.so.2
+[warning] Could not find dynamic library: libaudit.so.1
+[warning] Could not find dynamic library: libm.so.6
+[warning] Could not find dynamic library: libresolv.so.2
+[warning] Could not find dynamic library: libgcc_s.so.1
+[warning] Could not find dynamic library: libc.so.6
+[info] Warm up run (threads: 1)
+
+       [################################] 1/1. Finished in 20ms
+[error] Original test failed (warmup run)
+status: Failed
+stdout: '--- pam_authnft unit tests ---
+
+[STAGE 1] Input sanitization...
+[PASS]
+[STAGE 2] Seccomp kill on blocked syscall...
+[PASS]
+[STAGE 3] Allowlisted syscall survives sandbox...
+'
+stderr: ''
+[error] Error messages are treated as fatal errors. Exiting now.
