@@ -176,6 +176,150 @@ separate binary, or extend the allowlist in `src/sandbox.c` to
 permit ASan's syscall surface (and accept the corresponding loss in
 defence-in-depth strictness).
 
+## Post-experiment findings — bounds and refinements
+
+The experiment above established that mull + ASan compose for
+sandbox-free binaries, and the validator PRs (PR #49 for
+nft-validator, PR #50 for util-validator) shipped per-PR
+mutation workflows based on that finding. Running those workflows in CI surfaced four
+findings that refine or bound the original verdict. The first
+three are operational configuration knobs; the fourth is the
+first **epistemic bound** on what this compose can detect.
+
+### Finding 4 (headline): compose suppresses ASan stack-instrumentation on stack-OOB writes that don't propagate to return values
+
+The util-validator-mutation workflow's first useful run on
+PR #50 ([run 26034611767](https://github.com/identd-ng/pam_authnft/actions/runs/26034611767))
+showed a line-55 mutant in
+`util_normalize_ip` (`cxx_ge_to_gt`: `core_len >= sizeof(core)`
+mutated to `core_len > sizeof(core)`) surviving despite a test
+(`test_normalize_core_buffer_boundary`, added in PR #51) that
+catches the mutant cleanly under either gcc+ASan **or**
+clang+ASan **without** mull's pass plugin. In the composed
+`clang-19 -fpass-plugin=/usr/lib/mull-ir-frontend-19
+-fsanitize=address,undefined` invocation, ASan does not detect
+the OOB write at `core[64] = '\0'`. Captured mutant stdout:
+`util_validators: all tests passed`. Captured stderr: empty.
+No ASan output at all.
+
+The mutant produces no return-value difference (the function
+returns 0 via the inet_pton-reject path either way), so
+behavioural assertions cannot detect it. The only available
+detection mechanism is ASan's red-zone check on the OOB write,
+which is what the compose suppresses. This is **not** an
+equivalent mutant in the classical mutation-testing sense
+(unkillable under any test); it is a detectably-different
+mutant whose only detection mechanism is suppressed by this
+specific tooling combination. The distinction matters because
+"equivalent mutant" suggests a fundamental limit, while this
+finding is tooling-specific and the queued investigation may
+yet identify a way around it.
+
+**This bounds the experiment's "compose works for sandbox-free
+binaries" verdict.** Compose works for IR-instruction-level
+mutations whose effects propagate to return values. It silently
+suppresses ASan's detection of stack-OOB-write mutations whose
+effects don't propagate to return values. The validator
+binaries are subject to this bound; the suppression mechanism
+is unconfirmed but reproducible.
+
+Practical implication for future readers: a mull-killed-mutant
+count of N% does not mean N% of mutations are detected. It
+means N% of mutations that produce return-value-observable
+behavioural differences are detected. OOB-write mutations
+whose effects are observable only via ASan are a separate
+class, currently unkillable in this compose setup. The fuzz
+harnesses (`fuzz_username`, `fuzz_cgroup_path`) cover the
+OOB-write surface for those specific functions independently
+of mull; the two oracles are genuinely complementary, not
+overlapping.
+
+A scoped investigation is queued to determine whether the
+suppression generalises across all stack-OOB-write mutations
+or only specific patterns, whether pass-plugin CLI order
+matters, whether heap allocations are affected. Sub-questions
+are tractable with a small stub binary and flag variations;
+not in this doc's current scope.
+
+### Finding 1: survivor audit as a recurring artefact
+
+Each validator-mutation workflow's first useful run produces a
+non-killed list (survivors + timeouts + abnormal exits). Walking
+through that list classifies each entry into one of: real
+coverage gap | classification artefact | equivalent mutant |
+tooling-suppression finding. The classification produces
+concrete test additions for the real gaps and concrete
+configuration/tooling fixes for the artefacts.
+
+Empirical instance: PR #50's first run had 6 non-killed mutants.
+The audit in PR #51 classified them as 2 real gaps + 4 ASan-
+induced timeouts (classification artefact) + 0 crashed; 5 of the
+6 closed via the resulting commits. The remaining 1 is the
+finding-4 tooling-suppression case.
+
+Read this as the survivor audit being a recurring artefact, not
+a one-off — each new validator-mutation workflow's first run
+deserves the same treatment.
+
+### Finding 2: ASan-coupled mutation testing needs `--minimum-timeout` calibration
+
+Mull's per-mutant timeout is `max(baseline*10, --minimum-timeout)`
+([0.34 CLI reference](https://github.com/mull-project/mull/blob/0.34.0/docs/command-line/generated/mull-runner-cli-options.rst)).
+Under ASan, a mutant that trips heap- or stack-buffer-overflow
+detection aborts with 300-400ms of stack-symbolisation +
+abort overhead. On a baseline of ~30ms (typical for these
+validator binaries), the effective default per-mutant timeout
+is ~300ms — just under what ASan needs to register the abort
+cleanly. ASan-killed mutants get classified as Timedout
+(status=3) rather than Failed (status=1).
+
+Concrete value used in `util-validator-mutation.yml`:
+`--minimum-timeout 5000` (~15× the observed worst case from
+PR #50). PR #51's first commit reclassified 4 Timedout to
+Failed empirically.
+
+### Finding 3: `ASAN_OPTIONS halt_on_error` setting is failure-mode-dependent
+
+The seccomp-warmup-failure framing at the top of this doc set
+`ASAN_OPTIONS=halt_on_error=0` so that ASan-detected errors
+during the warmup run don't immediately abort the test binary.
+That setting was correct for the seccomp-coupled `test_suite.c`
+binary. Transferred to the validator binaries — which install
+no seccomp filter and run each mutant in a separate subprocess
+— it was the wrong default: a mutant that trips ASan continues
+past the bad write and may reach a test assertion that passes
+anyway via a different code path, getting mis-classified as
+Passed.
+
+The right setting for binaries-without-seccomp is
+`halt_on_error=1`: per-mutant subprocesses abort on first ASan
+error, mull-runner sees the non-zero exit, mutant classified as
+Failed. Validator workflows starting fresh should set this from
+the beginning rather than transferring the seccomp regime's
+setting.
+
+### Methodological recurrence — scope-transfer error class
+
+Findings 3 and the [ExecutionStatus correction
+in `ce3ca9c`](https://github.com/identd-ng/pam_authnft/commit/ce3ca9c)
+are two instances of the same shape of error: applying a
+setting / framing whose scope is regime-A to regime-B without
+re-deriving the scope question. ce3ca9c treated two sources of
+different scope (the Rust enum's full state machine vs the
+readthedocs tutorial's report-surface) as comparable on the
+same axis. Finding 3 transferred a configuration from the
+seccomp regime (test_suite.c) to a different runtime model
+(validator binaries' per-mutant subprocesses).
+
+Two instances is a pattern. The **"filter encodes intent" rule
+extends to sanitiser configuration**: each binary's
+`ASAN_OPTIONS` / `UBSAN_OPTIONS` setting needs its own scope
+question, not transfer from a paired binary in a different
+runtime model. A future reader seeing this pattern surface a
+third time should treat it as evidence the rule needs
+explicit codification (test, lint, or convention check) rather
+than only documentation.
+
 ## Mull 0.34 SQLite schema note
 
 The `.sqlite` files committed alongside this writeup use mull
