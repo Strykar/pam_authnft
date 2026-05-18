@@ -1,14 +1,43 @@
-# mull mutation testing config. Reference:
+# Mutation testing config for pam_authnft. See
 # https://mull-project.com/reference/yaml-config/
 #
-# Only one knob here for now: exclude tests/ from mutation. The
-# test suite is mull's oracle, so mutations inside the suite
-# itself cannot be killed by the suite and would all "survive",
-# dragging the score down without saying anything about src/
-# coverage. The MULL_OBJS list in the Makefile compiles
-# tests/test_suite.c as one of the .mull.o inputs precisely so it
-# can drive the runtime under mutation — but the mutations
-# embedded into that TU should be filtered before mull-runner
-# considers them.
+# Scope rule: this filter encodes intent, not path. The intent is
+# "production code reachable through a unit-testable surface."
+# Path-based excludes are a stand-in. When a future refactor puts
+# unit-testable code outside the included paths, or test
+# infrastructure outside tests/, fix the rule — not the symptom.
+#
+# tests/.* is excluded because the C suite drives mull. Mutations
+# inside the suite get marked killed when they happen to crash
+# the runner and survived otherwise — neither of which says
+# anything about src/ coverage. Any fixture or helper added
+# outside tests/ needs adding here.
+#
+# What mull does NOT measure
+# --------------------------
+# Mull operates on LLVM IR within a single translation unit at
+# instruction granularity. It can flip a comparison, swap an
+# operator, drop a return. It is structurally blind to:
+#
+#   1. Cross-process / privsep ordering. The pam_open_session in
+#      the child / pam_close_session in the monitor / pam_set_data
+#      not crossing the privsep boundary regression (closed by
+#      #45) was a lifecycle-shaped defect invisible to mutation.
+#
+#   2. Composition seams between pure validation and file I/O.
+#      validate_fragment_content and read_file in nft_handler.c
+#      compose into a read-then-use TOCTOU window. The window is
+#      integration-covered (real fragments on disk, real nft),
+#      not mull-covered. Mutating either function in isolation
+#      cannot exercise the window.
+#
+#   3. Anything routed through the kernel: libnftables commands,
+#      netlink, NSS resolution. nft_handler_setup, nft_handler_cleanup,
+#      and the group-membership probe go through libnftables and a
+#      real NSS stack; integration tests against real nft and a real
+#      directory are the right layer for those.
+#
+# Read a high mull score as "the pure decision surfaces in src/
+# are well-covered." Do not read it as "the module is correct."
 excludePaths:
   - tests/.*
