@@ -24,18 +24,67 @@
 #      not crossing the privsep boundary regression (closed by
 #      #45) was a lifecycle-shaped defect invisible to mutation.
 #
-#   2. Composition seams between pure validation and file I/O.
-#      validate_fragment_content and read_file in nft_handler.c
-#      compose into a read-then-use TOCTOU window. The window is
-#      integration-covered (real fragments on disk, real nft),
-#      not mull-covered. Mutating either function in isolation
-#      cannot exercise the window.
+#   2. Composition wrappers — functions whose body is "call pure
+#      validator A then pass its result to I/O dependency B."
+#      See subsection below for the registration mechanism.
 #
 #   3. Anything routed through the kernel: libnftables commands,
 #      netlink, NSS resolution. nft_handler_setup, nft_handler_cleanup,
-#      and the group-membership probe go through libnftables and a
-#      real NSS stack; integration tests against real nft and a real
-#      directory are the right layer for those.
+#      the group-membership probe, and the sd-bus orchestration in
+#      bus_handler_start/stop go through libnftables and a real NSS
+#      stack; integration tests against real nft and a real directory
+#      are the right layer for those.
+#
+# Composition wrappers — registration mechanism
+# ---------------------------------------------
+# A composition wrapper is a function that pairs a pure validator
+# (mull-testable) with an I/O dependency (not mull-testable). The
+# wrapper's correctness is a property of the composition, not of
+# either piece in isolation. The read-then-use TOCTOU window is the
+# canonical example. Integration tests cover the window against
+# real I/O; mock-based unit tests are rejected on the project's
+# adversarial-verification grounds (mocks test the model, not the
+# kernel/library, and security-load-bearing code must be exercised
+# against the real thing).
+#
+# The registration mechanism depends on how the wrapper sits in
+# the source tree relative to other code:
+#
+#   (a) File-aligned: the wrapper and its I/O dependency live in
+#       a file that's already excludePaths-eligible for other
+#       reasons, or can be cleanly excluded as a unit. Register
+#       via excludePaths plus a comment naming the wrapper.
+#       Example: validate_fragment_content + read_file in
+#       src/nft_handler.c — the whole file is already mutation-
+#       covered (not excluded), but the composition framing is
+#       documented in #49's commit message and below for
+#       reviewer recognition.
+#
+#   (b) Cross-cutting: the wrapper lives in a file alongside
+#       other code that's not integration territory in the same
+#       way. Path-based exclusion is the wrong granularity. The
+#       registration is documentation-only: name the function,
+#       name its dependencies, name why it's integration-covered.
+#       Reviewers reading mutation reports are expected to
+#       recognise survivors in such functions as expected, not
+#       gaps. Example: util_get_cgroup_path in src/bus_handler.c
+#       composes sd_pid_get_cgroup with validate_cgroup_path;
+#       bus_handler.c also contains bus_handler_start/stop which
+#       are integration territory of a different shape (sd-bus
+#       orchestration), so the file is not a clean exclusion
+#       unit.
+#
+#   (c) Extract: when (a) doesn't apply and (b) generates too
+#       many expected survivors for reviewers to triage cleanly,
+#       move the composition wrapper to its own TU so the file
+#       boundary aligns and (a) becomes available. Not applicable
+#       to any current wrapper, listed for the decision tree's
+#       completeness.
+#
+# Decision heuristic: does the file boundary align with the
+# exclusion intent? Yes → (a). No, but expected-survivor count is
+# small → (b). No, and expected-survivor count is large enough to
+# noise the report → (c).
 #
 # Read a high mull score as "the pure decision surfaces in src/
 # are well-covered." Do not read it as "the module is correct."

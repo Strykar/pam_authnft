@@ -1,0 +1,119 @@
+name: util-validator-mutation
+# Mutation testing for src/util_validators.c (util_is_valid_username,
+# util_normalize_ip, validate_cgroup_path). Per-PR signal on a fast
+# surface; sibling of validator-mutation.yml from #49. The convention
+# established by #49 is "one workflow per target binary, path-filtered
+# to its target sources"; this workflow applies it to the util
+# validators.
+#
+# Compose precondition: this binary has no seccomp filter, so mull's
+# pass plugin and -fsanitize=address,undefined can coexist in one
+# clang-19 invocation. Empirical basis: docs/MUTATION_ASAN_EXPERIMENT.md.
+on:
+  pull_request:
+    paths:
+      - 'src/util_validators.c'
+      - 'include/util_validators.h'
+      - 'tests/test_util_validators.c'
+      - 'Makefile'
+      - 'mull.yml'
+      - '.github/workflows/util-validator-mutation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MULL_LLVM_MAJOR: '19'
+
+jobs:
+  util-validator-mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install build dependencies
+        run: |
+          # Parity with validator-mutation.yml from #49: install the
+          # full library-dev cluster authnft.h's transitive includes
+          # pull in (pam, nftables, seccomp, systemd, cap, audit).
+          # The validator binary itself doesn't link against most of
+          # these, but the headers are required at compile time.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev \
+            libpam0g-dev libcap-dev libaudit-dev \
+            curl gnupg ca-certificates
+
+      - name: Install mull and matching clang
+        run: |
+          curl -1sLf "https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh" \
+              -o /tmp/mull-repo.sh
+          test "$(wc -l < /tmp/mull-repo.sh)" -lt 1000
+          sudo -E bash /tmp/mull-repo.sh
+          sudo apt-get install -y \
+              "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
+          "mull-runner-${MULL_LLVM_MAJOR}" --version
+
+      - name: Build mull + ASan util-validator test binary
+        env:
+          MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+        run: make test_util_validators.mull
+
+      - name: Run mull-runner
+        id: mull
+        env:
+          ASAN_OPTIONS: "abort_on_error=0:halt_on_error=0:print_summary=1"
+          UBSAN_OPTIONS: "halt_on_error=0:print_stacktrace=1:print_summary=1"
+        run: |
+          set +e
+          "mull-runner-${MULL_LLVM_MAJOR}" \
+              --ide-reporter-show-killed \
+              --reporters IDE --reporters SQLite \
+              --report-dir . \
+              --report-name util-validator-mutation \
+              ./test_util_validators.mull > mutation-report.txt 2>&1
+          ec=$?
+          set -e
+          echo "exit=$ec" >> "$GITHUB_OUTPUT"
+          {
+            echo "## util-validator mutation report"
+            echo
+            echo '```'
+            tail -200 mutation-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check for sanitiser-attributable kills
+        if: always()
+        run: |
+          # Mode-B detection per docs/MUTATION_ASAN_EXPERIMENT.md: any
+          # Crashed (execution_status=4) mutant is a sanitiser-
+          # attributable false-positive kill, not an assertion-driven
+          # kill. PR #49's validator-mutation showed 0 Crashed; this
+          # workflow's binary should too.
+          if [ ! -f util-validator-mutation.sqlite ]; then
+            echo "::error::util-validator-mutation.sqlite missing — mull-runner did not complete"
+            exit 1
+          fi
+          crashed=$(sqlite3 util-validator-mutation.sqlite \
+              "SELECT COUNT(*) FROM mutant WHERE execution_status = 4;")
+          echo "Crashed mutant count: $crashed"
+          if [ "$crashed" -ne 0 ]; then
+            echo "::warning::$crashed Crashed mutants — sanitiser-attributable, investigate"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: util-validator-mutation-report
+          path: |
+            mutation-report.txt
+            util-validator-mutation*.sqlite
+            util-validator-mutation*.txt
+          retention-days: 30
+          if-no-files-found: warn

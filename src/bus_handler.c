@@ -2,6 +2,7 @@
 // Copyright (C) 2025 Avinash H. Duduskar
 
 #include "authnft.h"
+#include "util_validators.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,44 +11,11 @@
 #include <systemd/sd-login.h>
 #include <errno.h>
 
-/* Pure validator: enforces the depth invariant on `cgroup_path` and
- * copies the leading-slash-stripped form to `out[out_sz]`. Does no
- * I/O. Exposed (non-static) under FUZZ_BUILD so fuzz_cgroup_path can
- * target it directly. Returns 0 on accept, -1 on reject; on reject,
- * `out[0]` is set to '\0'. */
-#ifndef FUZZ_BUILD
-static
-#endif
-int validate_cgroup_path(const char *cgroup_path, char *out, size_t out_sz) {
-    if (!out || out_sz == 0) return -1;
-    out[0] = '\0';
-
-    /* Must start with '/' */
-    if (!cgroup_path || cgroup_path[0] != '/') return -1;
-
-    const char *p = cgroup_path + 1; /* skip leading '/' */
-
-    /* First component: "authnft.slice" (13 chars) followed by '/' */
-    const char *slash = strchr(p, '/');
-    if (!slash) return -1;
-    size_t first_len = (size_t)(slash - p);
-    if (first_len != 13 || memcmp(p, "authnft.slice", 13) != 0) return -1;
-
-    /* Second component: "<name>.scope" with no further slashes */
-    const char *second = slash + 1;
-    if (second[0] == '\0') return -1;
-    if (strchr(second, '/') != NULL) return -1;
-
-    /* Must end with ".scope" */
-    size_t slen = strlen(second);
-    if (slen < 7 || memcmp(second + slen - 6, ".scope", 6) != 0) return -1;
-
-    /* Strip leading '/' and copy */
-    size_t total = strlen(p);
-    if (total >= out_sz) return -1;
-    memcpy(out, p, total + 1);
-    return 0;
-}
+/* validate_cgroup_path lives in src/util_validators.c; declared in
+ * util_validators.h. The previous #ifndef FUZZ_BUILD static #endif
+ * conditional is retired — the function is unconditionally extern,
+ * with pam_authnft.map's `local: *;` hiding it from the .so ABI.
+ * Convention from #49 applied here. */
 
 int util_get_cgroup_path(pam_handle_t *pamh, pid_t pid, char *out, size_t out_sz) {
     char *cgroup_path = NULL;

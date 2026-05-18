@@ -22,12 +22,15 @@
 // this line-oriented protocol; covered by the libFuzzer harnesses.
 
 #include "authnft.h"
+#include "util_validators.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 
-/* Declared non-static under -DFUZZ_BUILD in their respective .c files. */
-int validate_cgroup_path(const char *cgroup_path, char *out, size_t out_sz);
+/* keyring_sanitize and corr_sanitize_copy are declared non-static
+ * under -DFUZZ_BUILD in their respective .c files. validate_cgroup_path
+ * is now unconditionally extern via util_validators.h (the conditional-
+ * extern pattern was retired for it in the input-validators PR). */
 ssize_t keyring_sanitize(const char *in, size_t in_len,
                          char *out, size_t out_sz);
 size_t corr_sanitize_copy(const char *in, char *out, size_t out_sz);

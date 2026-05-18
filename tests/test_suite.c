@@ -2,6 +2,7 @@
 // Copyright (C) 2025 Avinash H. Duduskar
 
 #include "authnft.h"
+#include "util_validators.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <nftables/libnftables.h>
