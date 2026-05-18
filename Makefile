@@ -267,7 +267,17 @@ mutation-report: $(TEST_BIN).mull
 # 0.32.0; the documented invocation is `clang -fpass-plugin=
 # /usr/lib/mull-ir-frontend-N -g -grecord-command-line`. Debug
 # info is required so mull can map IR-level changes back to source.
-$(TEST_BIN).mull: tests/test_suite.c $(wildcard src/*.c) include/authnft.h
+#
+# Compile each translation unit separately. mull's pass plugin
+# re-invokes clang in -fsyntax-only mode per source file and bails
+# if the parent command compiles more than one .c at once (clang's
+# driver expands it into N -cc1 jobs; mull expects exactly one).
+# See issue #48 for the diagnostic.
+MULL_OBJS = $(OBJ_DIR)/test_suite.mull.o \
+            $(patsubst src/%.c,$(OBJ_DIR)/%.mull.o,$(wildcard src/*.c))
+
+.PHONY: .mull-preflight
+.mull-preflight:
 	@command -v $(MULL_CLANG) >/dev/null 2>&1 || { \
 	    echo "$(MULL_CLANG) not in PATH — install clang-$(MULL_LLVM_MAJOR)."; \
 	    exit 1; \
@@ -276,11 +286,23 @@ $(TEST_BIN).mull: tests/test_suite.c $(wildcard src/*.c) include/authnft.h
 	    echo "$(MULL_IR_FRONTEND) missing — install mull-$(MULL_LLVM_MAJOR)."; \
 	    exit 1; \
 	}
+
+$(OBJ_DIR)/%.mull.o: src/%.c include/authnft.h | .mull-preflight
+	@mkdir -p $(OBJ_DIR)
 	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) \
 	    -g -grecord-command-line \
 	    $(CFLAGS_BASE) `$(PKG_CONFIG) --cflags $(LIBS)` -O0 \
-	    tests/test_suite.c $(wildcard src/*.c) -o $@ \
-	    `$(PKG_CONFIG) --libs $(LIBS)`
+	    -c $< -o $@
+
+$(OBJ_DIR)/test_suite.mull.o: tests/test_suite.c include/authnft.h | .mull-preflight
+	@mkdir -p $(OBJ_DIR)
+	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) \
+	    -g -grecord-command-line \
+	    $(CFLAGS_BASE) `$(PKG_CONFIG) --cflags $(LIBS)` -O0 \
+	    -c $< -o $@
+
+$(TEST_BIN).mull: $(MULL_OBJS)
+	$(MULL_CLANG) $^ -o $@ `$(PKG_CONFIG) --libs $(LIBS)`
 
 install: $(TARGET) install-tmpfiles
 	sudo mkdir -p /etc/authnft/users
