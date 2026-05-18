@@ -301,10 +301,10 @@ setting.
 ### Methodological recurrence — scope-transfer error class
 
 Findings 3 and the [ExecutionStatus correction
-in `ce3ca9c`](https://github.com/identd-ng/pam_authnft/commit/ce3ca9c)
+in `d93e9bb`](https://github.com/identd-ng/pam_authnft/commit/d93e9bb)
 are two instances of the same shape of error: applying a
 setting / framing whose scope is regime-A to regime-B without
-re-deriving the scope question. ce3ca9c treated two sources of
+re-deriving the scope question. d93e9bb treated two sources of
 different scope (the Rust enum's full state machine vs the
 readthedocs tutorial's report-surface) as comparable on the
 same axis. Finding 3 transferred a configuration from the
