@@ -215,13 +215,35 @@ CREATE TABLE mutant (
 | 7 | FailFast |
 | 8 | NotCovered |
 
-Note: the upstream readthedocs SQLite-reporter tutorial omits
-`Invalid = 0` and `NotCovered = 8`, presenting statuses 1–7 only.
-The Rust enum at tag 0.34.0 (linked above) is the ground truth;
-the readthedocs page is stale relative to it. This experiment's
-queries safely ignore statuses 0, 6, 7, 8 because none of those
-values appear in the four runs' databases — every observed mutant
-landed in 1, 2, 3, or 4.
+**Correction-of-record.** An earlier version of this document
+characterised the upstream
+[readthedocs SQLite-reporter tutorial](https://mull.readthedocs.io/en/latest/SQLiteReporter.html)
+as stale relative to the Rust enum at tag 0.34.0. That
+characterisation was unsupported. The actual finding is the gap
+between the internal state machine (the Rust enum, 9 values 0–8)
+and the report surface (the `mutant.execution_status` column,
+which carries a subset of those values in practice). The original
+framing conflated the two; the corrected framing distinguishes
+them.
+
+Concretely: the Rust enum defines 9 `ExecutionStatus` values; the
+readthedocs tutorial documents statuses 1–7 as the report-surface
+values; empirically only statuses 1–3 appear across this
+experiment's four mutation runs (571 mutants total), with
+status 4 (Crashed) queried and confirmed zero in the runs where
+sanitiser attribution mattered. Statuses 0 (`Invalid`, the
+`#[default]` constructed-state) and 8 (`NotCovered`) are present
+in the Rust enum but **empirically unreachable across 571 mutants
+spanning four runs; upstream confirmation pending**. Statuses
+5–7 are similarly absent from all four databases.
+
+This experiment's queries treat status `1` OR `5` as killed-by-
+assertion (matching the `IN (1,5)` clause used in the SQL
+throughout this document), `2` as passed, `3` as timedout, and
+`4` as Crashed / sanitiser-attributable. Statuses `0` and `6`–`8`
+are not queried at all because no observation has placed any
+mutant there. Status `5` is queried but, like `6`–`8`, has not
+appeared across the four runs.
 
 Older mull versions (≤0.17) used a separate `execution_result` table
 keyed by `mutant_id`; that schema is gone in 0.34. Queries against
