@@ -58,16 +58,22 @@ jobs:
       - name: Build stub_compose_suppression.mull (mull + ASan + UBSan, mull-first CLI order)
         run: |
           # Run 1 baseline: faithful stub, both sanitisers, mull pass
-          # plugin BEFORE -fsanitize on the CLI. Subsequent runs
-          # modify these flags via commit-per-run; the baseline
-          # configuration matches util-validator-mutation.yml's
-          # actual production flags.
-          "clang-${MULL_LLVM_MAJOR}" \
-              -fpass-plugin=/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR} \
-              -fsanitize=address,undefined -fno-omit-frame-pointer \
-              -g -grecord-command-line -O0 \
-              experiment/stub_compose_suppression.c \
-              experiment/test_compose_suppression.c \
+          # plugin BEFORE -fsanitize on the CLI. Per-file compile +
+          # final link — mull's pass plugin re-invokes clang in
+          # -fsyntax-only mode per source file and bails on multi-file
+          # parents (the failure mode PR #47/#48 documented and the
+          # validator workflows fixed via the %.mull.o pattern). This
+          # workflow's stub binary is throwaway but the build pattern
+          # is not; it must mirror the production pattern to actually
+          # produce mutants. Subsequent runs modify these flags via
+          # commit-per-run.
+          CLANG="clang-${MULL_LLVM_MAJOR}"
+          PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
+          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0"
+          $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
+          $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
+          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer \
+              /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
               -o stub_compose_suppression.mull
 
       - name: Run mull-runner
