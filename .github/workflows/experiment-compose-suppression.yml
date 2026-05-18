@@ -55,21 +55,26 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (mull + ASan + UBSan, mull-first CLI order)
+      - name: Build stub_compose_suppression.mull (run 2 — HARDENING flags added)
         run: |
-          # Run 1 baseline: faithful stub, both sanitisers, mull pass
-          # plugin BEFORE -fsanitize on the CLI. Per-file compile +
-          # final link — mull's pass plugin re-invokes clang in
-          # -fsyntax-only mode per source file and bails on multi-file
-          # parents (the failure mode PR #47/#48 documented and the
-          # validator workflows fixed via the %.mull.o pattern). This
-          # workflow's stub binary is throwaway but the build pattern
-          # is not; it must mirror the production pattern to actually
-          # produce mutants. Subsequent runs modify these flags via
-          # commit-per-run.
+          # Run 2: rebuild the stub with the full HARDENING set
+          # matching pam_authnft's production CFLAGS_BASE. Run 1
+          # (commit d45fcd6) showed the line-B mutant getting killed
+          # in the bare stub, opposite to what util_validators.c's
+          # line-55 mutant does in production. Hypothesis H0: one or
+          # more HARDENING flags (most likely -fstack-protector-strong
+          # or -ftrivial-auto-var-init=zero, both of which affect
+          # stack layout) enable the suppression by interacting with
+          # ASan's stack instrumentation under mull's pass plugin.
+          # If line-B survives this run, H0 is confirmed and the next
+          # commit bisects HARDENING; if line-B is killed again, the
+          # difference is elsewhere (pkg-config flags, the test
+          # harness, the surrounding TU's functions).
           CLANG="clang-${MULL_LLVM_MAJOR}"
           PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
-          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0"
+          HARDENING="-fstack-clash-protection -fcf-protection -ftrivial-auto-var-init=zero -fstack-protector-strong -Wformat -Wformat-security -Werror=implicit-fallthrough -fno-strict-overflow -Wtrampolines"
+          CFLAGS_BASE="-fPIC -Wall -Wextra -D_GNU_SOURCE $HARDENING"
+          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line $CFLAGS_BASE -O0"
           $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
           $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
           $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer \
