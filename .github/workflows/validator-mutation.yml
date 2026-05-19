@@ -65,12 +65,25 @@ jobs:
       - name: Run mull-runner
         id: mull
         env:
-          ASAN_OPTIONS: "abort_on_error=0:halt_on_error=0:print_summary=1"
-          UBSAN_OPTIONS: "halt_on_error=0:print_stacktrace=1:print_summary=1"
+          # halt_on_error=1: per-mutant subprocesses (not seccomp-
+          # coupled) should abort on first ASan/UBSan error so
+          # mull-runner sees the non-zero exit and classifies as
+          # Failed. The halt_on_error=0 default transferred from
+          # the seccomp-warmup regime was wrong-by-scope; see
+          # PR #51's Finding 3 + docs/NFT_VALIDATOR_SURVIVOR_AUDIT.md.
+          ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:print_summary=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1:print_summary=1"
         run: |
           set +e
+          # --minimum-timeout 5000: ASan-induced aborts can take
+          # 300-400ms with stack symbolisation, exceeding mull's
+          # default per-mutant timeout. Without this, ASan-killed
+          # mutants get classified as Timedout (status=3) rather
+          # than Failed (status=1). See PR #51's Finding 2 +
+          # docs/NFT_VALIDATOR_SURVIVOR_AUDIT.md.
           "mull-runner-${MULL_LLVM_MAJOR}" \
               --ide-reporter-show-killed \
+              --minimum-timeout 5000 \
               --reporters IDE --reporters SQLite \
               --report-dir . \
               --report-name validator-mutation \
