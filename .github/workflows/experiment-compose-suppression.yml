@@ -23,6 +23,7 @@ on:
       - 'experiment/test_compose_suppression.c'
       - '.github/workflows/experiment-compose-suppression.yml'
       - 'mull.yml'
+      - 'Makefile'
   workflow_dispatch:
 
 permissions:
@@ -41,11 +42,17 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          # Run 4a reverts to the bare stub; the production-header
-          # cluster from run 3 is not needed. Only the mull repo
-          # install dependencies remain.
+          # Run 5c builds via the production Makefile target
+          # test_util_validators.mull, which transitively
+          # includes authnft.h's PAM/nftables/seccomp/systemd/
+          # cap/audit headers. Restore the production-deps
+          # cluster removed in 4a (matches util-validator-
+          # mutation.yml's install step).
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev \
+            libpam0g-dev libcap-dev libaudit-dev \
             curl gnupg ca-certificates
 
       - name: Install mull and matching clang
@@ -58,188 +65,179 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (run 5a-stkclash — fourth HARDENING flag, individual phase complete)
+      - name: Verify Makefile fix propagates MULL_EXTRA_CFLAGS to source-TU build
+        env:
+          MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
         run: |
-          # Run 5a-stkclash: fourth and final individual
-          # HARDENING flag. Three cell-4 eliminations banked:
-          #   5a-stkprot     (run 26089833756, commit 26ec3b8)
-          #   5a-autovarinit (run 26093491304, commit 71dd659)
-          #   5a-cfprot      (run 26096117471, commit a5e5b77)
-          # All produced byte-identical line-51 stderr at 4784
-          # bytes (two cleanly separated diagnostic blocks: UBSan
-          # logged, ASan tripped, ABORTING). The 4×cell-4 case
-          # materialises if this run also lands cell-4. Three-
-          # option branching with (C) → (A or B) sequencing,
-          # pre-committed in 5a-cfprot, applies.
+          # Checkpoint review: confirm the Makefile pattern-rule
+          # fix (line 321-326, adding $(MULL_EXTRA_CFLAGS) after
+          # -fpass-plugin) actually changes the source-TU build
+          # before mull-runner fires. Same audit-discipline shape
+          # as the build-flag audits before prior runs, applied
+          # to the load-bearing structural change this run rests
+          # on. Failing this check would mean the fix is in the
+          # commit but isn't doing what its commit message
+          # claims, which would invalidate 5c's verdict before
+          # the run produces it.
+          make -n test_util_validators.mull > /tmp/argv.txt 2>&1
+          if ! grep -E 'src/util_validators\.c' /tmp/argv.txt | grep -q 'fsanitize=address'; then
+              echo "::error::Makefile fix did not propagate MULL_EXTRA_CFLAGS to src/util_validators.c build"
+              cat /tmp/argv.txt
+              exit 1
+          fi
+          echo "Verified: src/util_validators.c build now has -fsanitize=address,undefined"
+          grep -A1 'src/util_validators\.c' /tmp/argv.txt | head -3
+
+      - name: Build test_util_validators.mull (run 5c — production-Makefile-fix verification)
+        env:
+          MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+        run: |
+          # Run 5c: direct verification of the H0' candidate
+          # surfaced by option (C)'s mechanical-argv-diff at
+          # 4×cell-4 (post 5a-stkclash, run 26096477272,
+          # commit 5164b05).
           #
-          # Single-flag, single-variable diff from 5b' (NOT from
-          # 5a-cfprot — strict sequencing). -fstack-clash-
-          # protection added at compile AND link. Mechanism:
-          # clang emits probe instructions for stack allocations
-          # that might exceed a guard page (4KiB), interleaving
-          # writes with allocation growth so a stack-clash
-          # attack can't skip past the guard. Our core[64] is
-          # 64 bytes, well under the threshold that would
-          # trigger probing in this function. The mechanism for
-          # this flag affecting ASan stack-instrumentation in
-          # our test surface is the thinnest of the four HARDENING
-          # flags; cell-4 is the highest-prior outcome.
+          # The argv-diff between production and the bare stub
+          # surfaced three asymmetries the original eyeball
+          # enumeration missed. Asymmetry 1 is load-bearing:
+          # the Makefile's source-TU mull-object rule
+          # ($(OBJ_DIR)/%.mull.o: src/%.c, line 321-326) does
+          # NOT reference $(MULL_EXTRA_CFLAGS). The test-TU
+          # rule ($(OBJ_DIR)/test_util_validators.mull.o,
+          # line 358-362) does. So in production:
+          #   - util_validators.mull.o (source TU containing
+          #     the line-55 mutation target) is compiled with
+          #     HARDENING + pkg-config cflags + -O0, but with
+          #     NO sanitiser instrumentation.
+          #   - test_util_validators.mull.o (test TU) is
+          #     compiled with sanitisers but no HARDENING.
+          #   - The link step pulls in the sanitiser runtimes
+          #     but does NOT retroactively instrument the
+          #     source TU's object code.
+          # Result: the OOB write at core[in_len] = '\0' in
+          # util_normalize_ip (src/util_validators.c:55-56)
+          # happens in unsanitised code. No shadow-byte check,
+          # no bounds check. ASan and UBSan are both linked
+          # but have no per-access hooks to service. The
+          # "compose suppression" observed in run 3 is not a
+          # sanitiser-instrumentation interaction; it is a
+          # build-recipe asymmetry where the source TU was
+          # never instrumented.
           #
-          # UBSAN_OPTIONS stays at halt_on_error=0.
+          # 5c applies the Makefile fix (one-line addition of
+          # $(MULL_EXTRA_CFLAGS) to the source-TU rule,
+          # mirroring the test-TU rule's pattern) and
+          # verifies whether the line-55 mutant gets killed
+          # when the source TU is actually instrumented.
           #
-          # Build-flag audit (same shape as previous pre-push
-          # audits):
-          #   - No -fcf-protection anywhere in workflow
-          #     (confirmed: 5a-cfprot's flag fully removed).
-          #   - No -fstack-protector-strong anywhere in workflow.
-          #   - No -ftrivial-auto-var-init anywhere in workflow.
-          #   - No -fno-strict-overflow anywhere in workflow.
-          #   - No -fstack-clash-protection already present
-          #     (would indicate inheritance from elsewhere).
-          # Per-file inline clang build, no CFLAGS_BASE
-          # inheritance.
+          # Workflow shape reverts from bare-stub (4a, 5b,
+          # 5b', 5a-*) back to run-3-style production-Makefile
+          # build, with the fix applied. The preceding step
+          # ("Verify Makefile fix propagates MULL_EXTRA_CFLAGS
+          # to source-TU build") is a checkpoint that runs
+          # make -n and confirms the fix is doing what its
+          # commit claims, before the actual mull build fires.
           #
-          # Verdict for line-51 cxx_ge_to_gt. Five interpretive
-          # cells, structurally identical to prior HARDENING
-          # runs with the flag name substituted:
+          # Verdict mapping for line-55 cxx_ge_to_gt in
+          # src/util_validators.c. NOTE: line-55 in
+          # util_validators.c is the ORIGINAL mutation target
+          # from run 3 / PR #51's audit, NOT the stub's
+          # analog at line 51 in experiment/stub_compose_
+          # suppression.c. The stub was a faithful structural
+          # mirror designed to reproduce the production
+          # behaviour in isolation; run 5c returns to the
+          # production binary itself with the Makefile fix
+          # applied, so the SQLite filter shifts from
+          # line_number = 51 to line_number = 55 AND
+          # filename LIKE '%util_validators.c%'.
           #
-          #   CELL 1 (2, stderr empty):
-          #     Full H0' reproduction. -fstack-clash-protection
-          #     SUFFICIENT to suppress both sanitisers. Pause
-          #     and write up. Surprising given the mechanism's
-          #     thinness; interpret carefully — the finding
-          #     would be about probe-instruction emission
-          #     interacting with mull's pass-plugin IR view,
-          #     not about stack-clash protection's intended
-          #     effect.
+          # Pre-stated (status_code, stderr_content) pairs:
           #
-          #   CELL 2 (1, UBSan only, no ASan):
-          #     Partial. stkclash suppresses ASan specifically.
-          #     Cumulative-additive: stkclash is the only flag
-          #     in the contributing set so far; subsequent
-          #     cumulative runs would re-introduce previously-
-          #     eliminated flags ONE AT A TIME on top of
-          #     stkclash to characterise the contributing set.
-          #     Eliminated flags re-enter the build only in
-          #     cumulative-additive mode, never in individual
-          #     mode.
+          #   (1, stderr contains AddressSanitizer
+          #       stack-buffer-overflow OR UndefinedBehavior
+          #       Sanitizer bounds-check diagnostic for
+          #       line 55):
+          #     H0' CONFIRMED. The production "suppression"
+          #     was sanitisers-not-applied to the source TU.
+          #     The bisection's original premise (compose-
+          #     suppression as a sanitiser-instrumentation
+          #     interaction) was wrong; the actual finding
+          #     is a Makefile pattern-rule omission. The fix
+          #     in this commit is the structural remediation.
+          #     Pause and write up. Three follow-up work-
+          #     items surface but are OUT OF SCOPE for the
+          #     investigation's writeup:
+          #       (1) util-validator-mutation workflow score
+          #           rebaseline (97.1% reflects mutations
+          #           whose effects produce return-value-
+          #           observable differences only; sanitiser-
+          #           detected mutations were not contributing
+          #           to the score).
+          #       (2) docs/MUTATION_ASAN_EXPERIMENT.md
+          #           commit 8968cf4's Finding 4 needs
+          #           significant revision; the "compose
+          #           suppresses ASan stack-instrumentation"
+          #           framing is wrong.
+          #       (3) PR #51's premise revisit: the convention
+          #           extension's coverage-bound rested on the
+          #           compose-suppression finding; the actual
+          #           bound is different.
+          #     None resolved by this run; named so the
+          #     writeup can surface them as follow-ups.
           #
-          #   CELL 3 (1, ASan only, no UBSan):
-          #     Surprising. stkclash×UBSan interaction;
-          #     stronger pause. Bisection model's additivity
-          #     assumption is wrong for this flag combination.
+          #   (2, stderr empty):
+          #     H0' not fully explained by sanitisers-not-
+          #     applied. Something else is also contributing.
+          #     Four sub-possibilities pre-stated rather than
+          #     reasoned ad hoc:
+          #       (a) HARDENING-en-bloc interaction with
+          #           now-applied sanitisers. The individual-
+          #           phase bisection eliminated each flag in
+          #           isolation against the bare stub; the
+          #           en-bloc combination on the source TU
+          #           with sanitisers might interact
+          #           differently. Next run: 5d-hard-en-bloc.
+          #       (b) Fourth structural asymmetry the argv-
+          #           diff didn't surface. Possible candidates:
+          #           link-order, build-output-path conventions,
+          #           MULL_RUNNER env interactions. Re-run the
+          #           differential at a different level (linked
+          #           binary's symbol table, strace of actual
+          #           build).
+          #       (c) pkg-config-inherited flags affecting
+          #           sanitiser instrumentation. Some
+          #           -D_FOO_SOURCE macros change libc-header
+          #           inlines (memcpy intrinsics, strchr
+          #           inlines) in ways that affect what gets
+          #           instrumented. The pkg-config cflags for
+          #           libnftables/libseccomp/libsystemd/pam/
+          #           libcap/audit add -D macros not present
+          #           in the bare stub.
+          #       (d) Test-TU and source-TU different flag
+          #           sets even when both sanitised: test-TU
+          #           has just sanitisers + debug + include;
+          #           source-TU (post-fix) has sanitisers +
+          #           HARDENING + pkg-config-cflags. The
+          #           bare-stub bisection had identical flags
+          #           on both TUs; this asymmetry is new in
+          #           5c.
           #
-          #   CELL 4 (1, UBSan then ASan + ABORTING, two
-          #           cleanly separated blocks):
-          #     No effect on either sanitiser. stkclash is NOT
-          #     a contributor in isolation. 4×cell-4 case
-          #     materialises: no single HARDENING flag is the
-          #     carrier in isolation. Advance to the (C) → (A
-          #     or B) sequencing pre-committed below.
+          #   (other status / stderr shapes):
+          #     Attribute from stderr column. The line-55
+          #     mutant's previous behaviour (run 3) was
+          #     status=2 empty stderr; any other outcome is a
+          #     state change to interpret.
           #
-          #   CELL 5 (any, INTERLEAVED diagnostics):
-          #     Attribution not safe; needs follow-up.
-          #
-          # (C) → (A or B) sequencing for the 4×cell-4 case,
-          # REFINED with mechanical-audit discipline:
-          #
-          #   (C) is NOT eyeball-reading-the-Makefile. The
-          #       original 4a-vs-production differential was
-          #       derived by reading the Makefile and the
-          #       workflow YAML and listing variables noticed
-          #       to differ — susceptible to the partial-pass-
-          #       as-complete-pass pattern the lineage has
-          #       caught repeatedly. The bisection has already
-          #       eliminated the variables surfaced by the
-          #       eyeball version; (C) needs to be mechanical.
-          #
-          #       Mechanical approach: have the production
-          #       build and the bare-stub build both emit
-          #       their effective compiler invocations (via
-          #       make -n, make CC='echo', or wrapping $CLANG
-          #       in a logging script) and diff the two argv
-          #       lists. Surfaces every flag difference,
-          #       including ones inherited from pkg-config,
-          #       environment, sub-makefiles, or anywhere else
-          #       they sneak in. Same audit discipline
-          #       distinction the lineage has codified:
-          #       mechanical-verification beats eyeball-
-          #       enumeration for load-bearing inputs.
-          #
-          #   THEN choose between (A) and (B) based on what
-          #   the mechanical differential surfaces:
-          #
-          #     (A) HARDENING-en-bloc cumulative run.
-          #         DESIGN: mechanical — concatenate the four
-          #         already-tested-individually HARDENING
-          #         flags onto the bare stub, run, verify
-          #         whether the combination produces a cell-
-          #         1/2/3 result that none of the individual
-          #         flags did. Workflow diff is straightforward.
-          #         Worth running if the mechanical differential
-          #         surfaces no new variables beyond the
-          #         original enumeration (i.e. HARDENING is the
-          #         only thing that varies, and the individual-
-          #         phase elimination rules out single-flag-
-          #         carrier but not flag-interaction).
-          #
-          #     (B) Advance to non-HARDENING variables.
-          #         DESIGN: requires prior-ordering of the
-          #         variables the mechanical differential
-          #         surfaces. Original enumeration's remaining
-          #         non-HARDENING categories: TU expansion
-          #         (5c), pkg-config-inherited cflags, test
-          #         surface. Mechanical differential may add
-          #         more.
-          #
-          #         If (C) surfaces test-surface as a variable
-          #         worth eliminating, the pre-staged next run
-          #         is the FORCED-TRIP CONTROL CASE: modify
-          #         test_util_validators.c to deliberately
-          #         plant a buffer-boundary input that
-          #         exercises core[in_len] = '\0' under
-          #         production CFLAGS, observe whether either
-          #         sanitiser fires. This directly validates
-          #         the load-bearing assumption registered
-          #         since 5a-stkprot: "run 3's status=2
-          #         reflects suppression of both sanitisers
-          #         on the OOB write, not the test surface
-          #         failing to exercise the OOB path." If
-          #         neither fires under the forced-trip
-          #         control, suppression is real and the
-          #         non-test-surface variables advance. If
-          #         either fires, the production "suppression"
-          #         is actually "test doesn't reach the bug"
-          #         and the entire bisection's premise
-          #         re-examines.
-          #
-          # Line-47 invariance: cxx_ge_to_gt AND cxx_ge_to_lt
-          # both expected to remain status=2 with empty stderr
-          # (parity across 4a, 5b, 5b', 5a-stkprot,
-          # 5a-autovarinit, 5a-cfprot). Post-run check both
-          # mutators.
-          #
-          # stderr_len drift check: expected 4784 if cell-4
-          # lands. A drift of more than a few bytes despite
-          # cell-4 mapping is a finding worth understanding
-          # before advancing.
-          #
-          # Duration trajectory note: 5b' 182ms, 5a-stkprot
-          # 395ms, 5a-autovarinit 215ms, 5a-cfprot 108ms. More
-          # variance than the stderr_len consistency suggests;
-          # likely single-run-on-shared-CI-hardware noise. If
-          # 5a-stkclash produces a duration outlier large
-          # enough to approach --minimum-timeout 5000, that's
-          # a signal worth investigating before attributing
-          # to flag mechanism.
-          CLANG="clang-${MULL_LLVM_MAJOR}"
-          PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
-          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0 -fstack-clash-protection"
-          $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
-          $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
-          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer -fstack-clash-protection \
-              /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
-              -o stub_compose_suppression.mull
+          # Post-run discipline (carried forward from prior
+          # runs): cite the actual workflow run ID and SQLite
+          # filename. Filter SQLite by line_number = 55 AND
+          # filename matches util_validators.c (the production
+          # binary's mull-runner produces a larger mutant
+          # population than the bare-stub workflow; expect
+          # many survivors at other lines from prior production
+          # state — the line-55 row is the one this run is
+          # designed to verify).
+          make test_util_validators.mull
 
       - name: Run mull-runner
         id: mull
@@ -254,7 +252,7 @@ jobs:
               --reporters IDE --reporters SQLite \
               --report-dir . \
               --report-name compose-suppression \
-              ./stub_compose_suppression.mull > mutation-report.txt 2>&1
+              ./test_util_validators.mull > mutation-report.txt 2>&1
           ec=$?
           set -e
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
