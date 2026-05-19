@@ -58,81 +58,102 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (run 5b — UBSan re-added, bare stub)
+      - name: Build stub_compose_suppression.mull (run 5b' — UBSan log-and-continue)
         run: |
-          # Run 5b: re-add -fsanitize=undefined to the bare stub.
-          # Run 4a falsified H0-as-originally-stated; H0' (the
-          # production suppression that 4a does not reproduce) is
-          # open. Bisect additively from 4a toward production, one
-          # variable per run. 5b adds back the variable 4a dropped
-          # for signal isolation.
+          # Run 5b': pre-planned follow-up to 5b. 5b confirmed UBSan
+          # trips on core[in_len] before ASan gets a turn (status=1
+          # with single UBSan diagnostic, no ASan output, no
+          # "ABORTING" terminator). ASan suppression status was
+          # undetermined — UBSan preempted on the way through.
           #
-          # Single-flag, single-variable diff from 4a:
-          #   -fsanitize=address → -fsanitize=address,undefined
-          # in both compile and link. Nothing else changes.
+          # 5b' resolves the preemption: UBSAN_OPTIONS halt_on_error
+          # flips from 1 to 0 in the mull-runner env so UBSan logs
+          # the bounds-check failure and execution continues past
+          # the access site. The write at core[in_len] = '\0' then
+          # proceeds; if ASan is not suppressed, its red-zone check
+          # fires on the same write. Single-variable diff from 5b
+          # (UBSAN_OPTIONS only — build flags unchanged).
           #
-          # Bare flags otherwise: no HARDENING, no _FORTIFY_SOURCE,
-          # -O0. Test file unchanged (decoupled from per-build
-          # interpretation; verdict mapping lives here).
+          # Build-flag audit (confirm no override of UBSan's
+          # default recover-handler behaviour, same shape as the
+          # _FORTIFY_SOURCE audit before run 4a):
+          #   - No -fno-sanitize-recover anywhere in the workflow
+          #     or Makefile (grep verified pre-push).
+          #   - No -fsanitize-trap=undefined or
+          #     -fsanitize-undefined-trap-on-error anywhere.
+          #   - Build is per-file inline clang in this workflow,
+          #     not through the Makefile, so no CFLAGS_BASE
+          #     inheritance.
+          # Clang's defaults for -fsanitize=undefined are
+          # recover-handler-on and no-trap, so UBSAN_OPTIONS
+          # halt_on_error=0 will be honored.
           #
           # Verdict for line-51 cxx_ge_to_gt (filter SQLite by
           # line_number = 51 AND mutator = 'cxx_ge_to_gt'). Pre-
-          # stated as (status_code, stderr_content) pairs, not as
-          # status-name semantics:
+          # stated as (status_code, stderr_content) pairs:
           #
-          #   (2, empty):
-          #     Mutant survived. H0' candidate, narrowed by 5b's
-          #     variables: mull+ASan+UBSan compose at -O0 with no
-          #     HARDENING suppresses both sanitisers' runtime
-          #     checks on stack OOB writes. Further hedges may
-          #     apply depending on which subsequent runs confirm
-          #     or narrow the carrier.
+          #   (2, stderr contains UBSan diagnostic only, no ASan):
+          #     UBSan logged, execution continued, ASan did not
+          #     trip on the write. ASan suppression CONFIRMED. H0'
+          #     candidate (narrowed by 5b's build variables):
+          #     mull+ASan+UBSan compose at -O0 with no HARDENING
+          #     suppresses ASan stack-instrumentation specifically;
+          #     UBSan's bounds-check instrumentation is NOT
+          #     suppressed. This is a stopping point for the
+          #     bisection — production-reproduction (run 3) has a
+          #     partial explanation; the next investigation layer
+          #     is "why does UBSan's bounds check not always fire
+          #     in production" rather than continuation of the
+          #     current additive bisection.
           #
-          #   (1, "AddressSanitizer: stack-buffer-overflow" +
-          #       "ABORTING", no UBSan diagnostic):
-          #     ASan tripped, UBSan did not preempt. UBSan-in-
-          #     compose is not the H0' carrier in the bare stub.
-          #     Advance to 5a-split (HARDENING per-flag) or 5c (TU
-          #     expansion).
+          #   (1, UBSan diagnostic followed by AddressSanitizer
+          #       block + "ABORTING"):
+          #     UBSan logged, ASan tripped on the subsequent
+          #     write. Neither sanitiser is suppressed in the bare
+          #     stub. UBSan-in-compose is NOT the H0' carrier.
+          #     Advance to 5a-split (HARDENING per-flag: 5a-stkprot,
+          #     5a-autovarinit, 5a-stkclash, 5a-cfprot — four
+          #     single-variable runs, each with its own pre-stated
+          #     verdict mapping written before firing).
           #
-          #   (1, "runtime error:" or "UndefinedBehaviorSanitizer"
-          #       diagnostic, no ASan diagnostic):
-          #     UBSan tripped, preempted ASan. ASan suppression
-          #     status not determined by this run alone. Pre-
-          #     planned follow-up 5b': drop abort_on_error from
-          #     UBSAN_OPTIONS so UBSan logs but doesn't terminate,
-          #     letting ASan get a turn. 5b' has its own verdict
-          #     mapping, written before firing, not inherited.
+          #   (1, UBSan diagnostic only + SIGABRT, no ASan):
+          #     UBSan logged but the process aborted anyway
+          #     despite halt_on_error=0. Investigate. Possible
+          #     mechanisms: clang version-specific default
+          #     overrides the runtime option, an inherited
+          #     compile-time recover/trap flag the audit missed,
+          #     or a UBSan handler behaviour for this specific
+          #     check (bounds) that doesn't honor halt_on_error.
+          #     Not interpretable as H0' evidence until the abort
+          #     mechanism is identified.
           #
-          #   (1, BOTH diagnostics as cleanly separated blocks):
-          #     First complete diagnostic block by line order of
-          #     the "ERROR:" or "runtime error:" anchor determines
-          #     kill attribution. Second block is evidence the
-          #     second sanitiser was not suppressed at this site.
+          #   (2, stderr empty — neither sanitiser fired):
+          #     UBSan-in-compose IS the H0' carrier (its bounds
+          #     check fired in 5b but not in 5b' — same code path,
+          #     only difference is halt_on_error). Two sub-cases:
+          #     (a) UBSAN_OPTIONS environment suppressing the
+          #         diagnostic too — investigate UBSAN_OPTIONS
+          #         interactions.
+          #     (b) Build flag (e.g. inherited -fsanitize-trap
+          #         the audit missed) suppressing the diagnostic
+          #         at compile time — rebuild with explicit
+          #         -fno-sanitize-trap and re-run.
           #
-          #   (1, INTERLEAVED diagnostics: lines from both mixed
-          #       beyond clean block separation):
-          #     Attribution not safe from this run. Stderr writes
-          #     are not atomically synchronised across sanitiser
-          #     handlers writing on the same fault. Treat as the
-          #     "needs follow-up" case (see 5b' above) rather than
-          #     guessing first-fired.
+          #   (1, INTERLEAVED diagnostics: lines mixed beyond
+          #       clean block separation):
+          #     Same as 5b: needs follow-up rather than guessing
+          #     first-fired.
           #
           #   (4, _), (5, _), (3, _):
-          #     Different mull encoding for some kill condition.
           #     Attribute from stderr column, not from status
-          #     name. 4a established status=1 + exit_status=-1 is
-          #     mull-0.34's encoding for signal-terminated;
-          #     status=4 is some narrower condition not yet
-          #     characterised.
+          #     name.
           #
-          # Line-47 prediction: cxx_ge_to_gt and cxx_ge_to_lt
-          # expected to remain status=2 survivors (equivalent on
-          # this test surface regardless of which sanitiser fires
-          # at line 51). Post-run check: confirm line-47 status
-          # did not flip between 4a and 5b. A flip would be a
-          # surprising result this verdict mapping does not
-          # enumerate; re-examine before interpreting H0'.
+          # Line-47 prediction: cxx_ge_to_gt AND cxx_ge_to_lt
+          # both expected to remain status=2 with empty stderr in
+          # 5b' (parity, same as 4a and 5b). Post-run check both
+          # mutators; a divergence between them at line-47 (one
+          # flips status, the other doesn't) is a surprising
+          # result the verdict mapping does not enumerate.
           CLANG="clang-${MULL_LLVM_MAJOR}"
           PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
           CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0"
@@ -146,7 +167,7 @@ jobs:
         id: mull
         env:
           ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:print_summary=1"
-          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1:print_summary=1"
+          UBSAN_OPTIONS: "halt_on_error=0:print_stacktrace=1:print_summary=1"
         run: |
           set +e
           "mull-runner-${MULL_LLVM_MAJOR}" \
