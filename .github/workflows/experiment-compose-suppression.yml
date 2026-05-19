@@ -80,13 +80,20 @@ jobs:
           # claims, which would invalidate 5c's verdict before
           # the run produces it.
           make -n test_util_validators.mull > /tmp/argv.txt 2>&1
-          if ! grep -E 'src/util_validators\.c' /tmp/argv.txt | grep -q 'fsanitize=address'; then
+          # make -n emits each clang invocation across multiple
+          # lines via backslash continuation. The -c source path
+          # (src/util_validators.c) lands on the LAST continuation
+          # line; -fsanitize=address is on the FIRST. Single-line
+          # grep won't see them together. Use -B context to scope
+          # the search to the lines preceding the -c source path,
+          # which captures the whole invocation block.
+          if ! grep -B5 'src/util_validators\.c' /tmp/argv.txt | grep -q 'fsanitize=address'; then
               echo "::error::Makefile fix did not propagate MULL_EXTRA_CFLAGS to src/util_validators.c build"
               cat /tmp/argv.txt
               exit 1
           fi
-          echo "Verified: src/util_validators.c build now has -fsanitize=address,undefined"
-          grep -A1 'src/util_validators\.c' /tmp/argv.txt | head -3
+          echo "Verified: src/util_validators.c build invocation now contains -fsanitize=address,undefined"
+          grep -B5 'src/util_validators\.c' /tmp/argv.txt
 
       - name: Build test_util_validators.mull (run 5c — production-Makefile-fix verification)
         env:
