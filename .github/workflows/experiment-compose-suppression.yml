@@ -41,8 +41,16 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # Cluster matches util-validator-mutation.yml's install
+          # step. The bare stub from runs 1-2 didn't need these, but
+          # run 3 builds the actual production source which
+          # transitively includes authnft.h's PAM/nftables/seccomp/
+          # systemd/cap/audit headers.
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev \
+            libpam0g-dev libcap-dev libaudit-dev \
             curl gnupg ca-certificates
 
       - name: Install mull and matching clang
@@ -55,31 +63,27 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (run 2 — HARDENING flags added)
+      - name: Build test_util_validators.mull (run 3 — production source via Makefile)
+        env:
+          MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
         run: |
-          # Run 2: rebuild the stub with the full HARDENING set
-          # matching pam_authnft's production CFLAGS_BASE. Run 1
-          # (commit d45fcd6) showed the line-B mutant getting killed
-          # in the bare stub, opposite to what util_validators.c's
-          # line-55 mutant does in production. Hypothesis H0: one or
-          # more HARDENING flags (most likely -fstack-protector-strong
-          # or -ftrivial-auto-var-init=zero, both of which affect
-          # stack layout) enable the suppression by interacting with
-          # ASan's stack instrumentation under mull's pass plugin.
-          # If line-B survives this run, H0 is confirmed and the next
-          # commit bisects HARDENING; if line-B is killed again, the
-          # difference is elsewhere (pkg-config flags, the test
-          # harness, the surrounding TU's functions).
-          CLANG="clang-${MULL_LLVM_MAJOR}"
-          PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
-          HARDENING="-fstack-clash-protection -fcf-protection -ftrivial-auto-var-init=zero -fstack-protector-strong -Wformat -Wformat-security -Werror=implicit-fallthrough -fno-strict-overflow -Wtrampolines"
-          CFLAGS_BASE="-fPIC -Wall -Wextra -D_GNU_SOURCE $HARDENING"
-          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line $CFLAGS_BASE -O0"
-          $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
-          $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
-          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer \
-              /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
-              -o stub_compose_suppression.mull
+          # Run 3: H0 falsified by run 2 (7c1a90d) — adding HARDENING
+          # flags to the bare stub did not produce the suppression.
+          # Pivot to the production source. Build test_util_validators
+          # .mull via the Makefile target used by util-validator-
+          # mutation.yml in production. This is the most direct test:
+          # if the suppression reproduces in this workflow with the
+          # production source + production build path, the
+          # investigation has a self-contained reproducer and can
+          # bisect downward (strip pieces from the production state
+          # until the suppression disappears).
+          #
+          # If line-55 of src/util_validators.c (cxx_ge_to_gt) shows
+          # as Passed (status=2), reproducer confirmed. If it shows
+          # as Failed (status=1), something about the validator
+          # workflow's CI environment specifically — not the source
+          # or the build flags — drives the suppression.
+          make test_util_validators.mull
 
       - name: Run mull-runner
         id: mull
@@ -94,7 +98,7 @@ jobs:
               --reporters IDE --reporters SQLite \
               --report-dir . \
               --report-name compose-suppression \
-              ./stub_compose_suppression.mull > mutation-report.txt 2>&1
+              ./test_util_validators.mull > mutation-report.txt 2>&1
           ec=$?
           set -e
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
