@@ -58,151 +58,177 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (run 5a-autovarinit — second HARDENING flag)
+      - name: Build stub_compose_suppression.mull (run 5a-cfprot — third HARDENING flag)
         run: |
-          # Run 5a-autovarinit: second HARDENING flag in the
-          # additive bisection. 5a-stkprot (run ID 26089833756,
-          # commit 26ec3b8) landed CELL 4: both sanitisers fired,
-          # neither suppressed. -fstack-protector-strong is NOT a
-          # contributor to H0' in the bare stub at -O0 with this
-          # test surface. Strict sequencing rules: drop the
-          # eliminated flag, test the next in isolation against
-          # the bare-stub baseline (not against bare-stub +
-          # stkprot — carrying nothing forward is just carrying
-          # noise).
+          # Run 5a-cfprot: third HARDENING flag in the additive
+          # bisection. Two cell-4 eliminations banked:
+          #   5a-stkprot     (run 26089833756, commit 26ec3b8)
+          #   5a-autovarinit (run 26093491304, commit 71dd659)
+          # Both fired both sanitisers cleanly, stderr byte-
+          # identical at 4784 bytes across 5b', 5a-stkprot,
+          # 5a-autovarinit. Per-run stderr byte-equality is
+          # incidental confirmation that the bisection variable
+          # is being changed cleanly across runs and previous
+          # state isn't bleeding through via build cache or
+          # partial reverts — a coherence signal worth recording
+          # in the writeup for future bisection investigators.
           #
           # Single-flag, single-variable diff from 5b' (NOT from
-          # 5a-stkprot — strict sequencing means each cell-4
-          # eliminated flag drops out of the running build):
-          # -ftrivial-auto-var-init=zero added at compile AND
-          # link (parity with production's same-flags-at-both
-          # pattern). Mechanism: clang emits IR-level
-          # initialisation of stack locals at function entry,
-          # zero-filling uninitialised stack variables. Plausible
-          # interaction with ASan stack-instrumentation: the
-          # auto-init writes happen at IR level and may run
-          # before ASan's red-zone poisoning, potentially
-          # changing red-zone semantics or triggering ASan early.
-          # Lower-prior than stkprot's stack-reshaping mechanism
-          # but still in the plausible-interaction set.
+          # 5a-autovarinit — strict sequencing means each cell-4
+          # eliminated flag drops out of the running build).
+          # -fcf-protection added at compile AND link. Mechanism:
+          # clang inserts CET endbr/landing-pad instructions for
+          # control-flow integrity, primarily affecting function
+          # entry/exit codegen. Lower direct interaction with
+          # stack data than stkprot or autovarinit; the
+          # plausible mechanism for ASan suppression is that
+          # endbr insertion shifts function-entry IR offsets in
+          # a way that mull's pass plugin sees different IR at
+          # the point it emits mutation hooks. Lower-prior than
+          # the two eliminated flags but not zero.
+          #
+          # Interpretation note: a cell-1 outcome here would
+          # produce a qualitatively different finding than
+          # cell-1 on stkprot or autovarinit would have. The
+          # mechanism would be about pass-plugin sensitivity to
+          # control-flow instrumentation, not about ASan
+          # stack-instrumentation per se, and the H0' framing
+          # would need to shift again to accommodate. Worth
+          # being mentally prepared for this; not a design
+          # change.
+          #
           # UBSAN_OPTIONS stays at halt_on_error=0.
           #
           # Build-flag audit (same shape as previous pre-push
           # audits):
-          #   - No -fstack-protector-strong anywhere in workflow
-          #     (confirmed: 5a-stkprot's flag fully removed).
+          #   - No -ftrivial-auto-var-init anywhere in workflow
+          #     (confirmed: 5a-autovarinit's flag fully removed).
+          #   - No -fstack-protector-strong anywhere in workflow.
           #   - No -fstack-clash-protection anywhere in workflow.
-          #   - No -fcf-protection anywhere in workflow.
           #   - No -fno-strict-overflow anywhere in workflow.
-          #   - No -ftrivial-auto-var-init already present
-          #     (would indicate inheritance from elsewhere).
-          # Build is per-file inline clang, not Makefile-driven,
-          # so no CFLAGS_BASE inheritance. The flag added here
-          # is the only HARDENING variable in play.
+          #   - No -fcf-protection already present (would
+          #     indicate inheritance from elsewhere).
+          # Per-file inline clang build, no CFLAGS_BASE
+          # inheritance. The flag added here is the only
+          # HARDENING variable in play.
           #
           # H0' framing unchanged: production shows BOTH
           # sanitisers suppressed; success condition is "both
           # stop firing", not "ASan stops firing."
           #
           # Verdict for line-51 cxx_ge_to_gt. Five interpretive
-          # cells, structurally identical to 5a-stkprot's with
-          # the flag name substituted (autovarinit ↔ stkprot):
+          # cells, structurally identical to prior runs with
+          # the flag name substituted:
           #
           #   CELL 1 (2, stderr empty):
-          #     Full H0' reproduction. -ftrivial-auto-var-init
-          #     =zero is SUFFICIENT to suppress both sanitisers
-          #     in the bare-stub compose at -O0. Pause and
-          #     write up.
+          #     Full H0' reproduction. -fcf-protection is
+          #     SUFFICIENT to suppress both sanitisers in the
+          #     bare-stub compose at -O0. Pause and write up.
+          #     Note interpretation shift: a control-flow-
+          #     instrumentation mechanism for the suppression
+          #     is qualitatively different from a stack-data
+          #     mechanism; the H0' framing would need to
+          #     accommodate "pass-plugin sensitivity to
+          #     control-flow codegen" as the carrier rather
+          #     than "ASan stack-instrumentation suppression"
+          #     as a generic mechanism.
           #
-          #   CELL 2 (1, UBSan diagnostic only, no ASan block,
-          #           no "ABORTING"):
-          #     Partial reproduction. UBSan still fires, ASan
-          #     suppressed. -ftrivial-auto-var-init=zero is a
-          #     NECESSARY-BUT-NOT-SUFFICIENT contributor.
-          #     Bisection model shifts to cumulative-additive:
-          #     next run is 5a-autovarinit + 5a-cfprot (or
-          #     autovarinit + stkclash, prior-ordered). The
-          #     cumulative set starts with autovarinit alone;
-          #     previously-eliminated flags (stkprot) stay
-          #     eliminated and do NOT re-enter the build. The
-          #     next run's verdict mapping reframes from "is
-          #     this flag the carrier" to "does this flag,
-          #     added to autovarinit, advance H0' reproduction
-          #     further" — pre-stated in the cell-2 commit at
-          #     run time, not inherited from this run's mapping.
+          #   CELL 2 (1, UBSan only, no ASan):
+          #     Partial. cfprot suppresses ASan specifically.
+          #     Cumulative-additive next: 5a-cfprot +
+          #     5a-stkclash. Cumulative set starts with cfprot
+          #     alone; previously-eliminated flags (stkprot,
+          #     autovarinit) stay eliminated and do NOT re-enter
+          #     the build. The next run's verdict mapping
+          #     reframes to "does stkclash, added to cfprot,
+          #     advance H0' reproduction further."
           #
-          #   CELL 3 (1, ASan diagnostic block + "ABORTING",
-          #           no UBSan):
-          #     Surprising. autovarinit×UBSan interaction;
-          #     stronger pause (same shape as 5a-stkprot cell 3):
-          #     the bisection model's additivity assumption is
-          #     wrong for this flag combination, and continuing
-          #     without characterising the interaction would
-          #     compound uncharacterised variables across
-          #     subsequent runs.
+          #   CELL 3 (1, ASan only, no UBSan):
+          #     Surprising. cfprot×UBSan interaction; stronger
+          #     pause. Bisection model's additivity assumption
+          #     is wrong for this flag combination.
           #
-          #   CELL 4 (1, UBSan diagnostic then ASan block +
-          #           "ABORTING", two cleanly separated blocks
-          #           like 5b' and 5a-stkprot):
-          #     No effect on either sanitiser. autovarinit is
-          #     NOT a contributor to H0' in the bare stub at
-          #     -O0 with this test surface. Eliminate; advance
-          #     to 5a-cfprot as the next single-variable
+          #   CELL 4 (1, UBSan then ASan + ABORTING, two
+          #           cleanly separated blocks like prior runs):
+          #     No effect on either sanitiser. cfprot is NOT a
+          #     contributor to H0' in the bare stub at -O0 with
+          #     this test surface. Eliminate; advance to
+          #     5a-stkclash as the final single-variable
           #     additive run.
           #
           #   CELL 5 (any, INTERLEAVED diagnostics):
-          #     Attribution not safe; treat as needs-follow-up.
+          #     Attribution not safe; needs follow-up.
           #
           #   (4, _), (5, _), (3, _):
           #     Attribute from stderr column.
           #
-          # Three-option branching pre-stated for the "all four
-          # HARDENING flags individually eliminate" scenario
-          # (4×cell-4 across 5a-stkprot, 5a-autovarinit,
-          # 5a-cfprot, 5a-stkclash). Already one cell-4 banked
-          # at 5a-stkprot; if the remaining three also land
-          # cell 4, the decision is NOT automatically "advance
-          # to HARDENING en-bloc". Three options to weigh under
-          # whatever evidence the bisection has produced by
-          # that point:
-          #     (A) HARDENING-en-bloc cumulative run. Tests
-          #         whether two or more HARDENING flags only
-          #         suppress when present together (flag
-          #         interaction). Distinct from any of the
-          #         individual runs.
-          #     (B) Advance to other variables in the 4a-vs-
-          #         production differential: TU expansion (5c),
-          #         pkg-config-inherited cflags, build-path
-          #         differences. HARDENING is not the
-          #         contributor; something else is.
-          #     (C) Re-derive the 4a-vs-production differential
-          #         before concluding HARDENING-en-bloc is the
-          #         next step. The initial differential may be
-          #         incomplete; the contributor may be a
-          #         variable that wasn't surfaced in the first
-          #         pass.
-          # The post-4×cell-4 decision is between these three
-          # options, not "obviously do en-bloc next."
+          # Three-option branching for the 4×cell-4 scenario,
+          # REFINED with sequencing now that two cell-4 are
+          # banked: the three options are NOT mutually exclusive.
+          # (C) is a prerequisite for choosing between (A) and
+          # (B), not a parallel alternative.
+          #
+          #   (C) FIRST → re-derive the 4a-vs-production
+          #       differential by reading the production
+          #       Makefile's effective CFLAGS for the validator
+          #       binary fresh, line by line, against the bare-
+          #       stub workflow's CFLAGS, looking for anything
+          #       not on the original enumeration (HARDENING,
+          #       _FORTIFY_SOURCE via -D, UBSan eliminated, TU
+          #       expansion, pkg-config-inherited cflags, test
+          #       surface). The initial enumeration may be
+          #       incomplete; the contributor may be a variable
+          #       not yet surfaced.
+          #
+          #   THEN choose between (A) and (B):
+          #       (A) HARDENING-en-bloc cumulative run. Tests
+          #           flag interaction (two or more HARDENING
+          #           flags only suppress when together).
+          #       (B) Advance to other variables from the fresh
+          #           differential (TU expansion, pkg-config,
+          #           build-path, or whatever (C) surfaces).
+          #
+          # Pre-committing the (C) → (A or B) sequencing now
+          # protects against the post-4×cell-4 decision being
+          # reasoned in real-time on the strength of priors.
+          # If 5a-stkclash also lands cell 4, the next action
+          # is mechanical: re-derive the differential, then
+          # decide.
+          #
+          # Continuation rule regardless of 5a-cfprot outcome:
+          # 5a-stkclash fires next. Cell-4 advances to stkclash
+          # as the strict-sequencing continuation. Cell-1, -2,
+          # or -3 changes the framing but does not skip
+          # stkclash — the individual-flag phase completes
+          # before any post-individual decision (en-bloc or
+          # advance-elsewhere). This is the discipline default;
+          # only an explicit decision to abort the individual
+          # phase changes it.
           #
           # Line-47 invariance: cxx_ge_to_gt AND cxx_ge_to_lt
           # both expected to remain status=2 with empty stderr
-          # (parity across 4a, 5b, 5b', 5a-stkprot). Post-run
-          # check both mutators.
+          # (parity across 4a, 5b, 5b', 5a-stkprot,
+          # 5a-autovarinit). Post-run check both mutators.
           #
-          # Load-bearing assumption (unchanged from 5a-stkprot):
-          # run 3's status=2 reflects suppression of both
-          # sanitisers on the OOB write, not the test surface
-          # failing to exercise the OOB path. Pre-planned
-          # verification (if writeup turns up contradicting
-          # evidence): modify test_util_validators.c to plant
-          # a buffer-boundary input under production CFLAGS,
-          # observe whether either sanitiser fires.
+          # stderr_len drift check: expected 4784 if cell-4
+          # lands (byte-equality with prior cell-4 runs). A
+          # drift of more than a few bytes despite cell-4
+          # mapping is a finding worth understanding before
+          # advancing — would suggest cfprot is changing
+          # something in the diagnostic output even though
+          # both sanitisers still fire.
+          #
+          # Load-bearing assumption (unchanged): run 3's
+          # status=2 reflects suppression of both sanitisers on
+          # the OOB write, not the test surface failing to
+          # exercise the OOB path. Pre-planned verification
+          # documented in prior commits.
           CLANG="clang-${MULL_LLVM_MAJOR}"
           PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
-          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0 -ftrivial-auto-var-init=zero"
+          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0 -fcf-protection"
           $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
           $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
-          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer -ftrivial-auto-var-init=zero \
+          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer -fcf-protection \
               /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
               -o stub_compose_suppression.mull
 
