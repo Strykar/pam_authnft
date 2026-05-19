@@ -58,108 +58,148 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (run 5b' — UBSan log-and-continue)
+      - name: Build stub_compose_suppression.mull (run 5a-stkprot — first HARDENING flag)
         run: |
-          # Run 5b': pre-planned follow-up to 5b. 5b confirmed UBSan
-          # trips on core[in_len] before ASan gets a turn (status=1
-          # with single UBSan diagnostic, no ASan output, no
-          # "ABORTING" terminator). ASan suppression status was
-          # undetermined — UBSan preempted on the way through.
+          # Run 5a-stkprot: first HARDENING flag in the additive
+          # bisection. 5b' eliminated UBSan-in-compose as the H0'
+          # carrier (status=1 with UBSan diagnostic followed by
+          # ASan block + ABORTING; neither suppressed in the bare
+          # stub). The bisection advances to HARDENING flags one
+          # at a time. Prior-probability ordering: stkprot first
+          # (reshapes stack frame around arrays — most direct
+          # mechanism for interacting with ASan stack
+          # instrumentation), then autovarinit, then cfprot, then
+          # stkclash.
           #
-          # 5b' resolves the preemption: UBSAN_OPTIONS halt_on_error
-          # flips from 1 to 0 in the mull-runner env so UBSan logs
-          # the bounds-check failure and execution continues past
-          # the access site. The write at core[in_len] = '\0' then
-          # proceeds; if ASan is not suppressed, its red-zone check
-          # fires on the same write. Single-variable diff from 5b
-          # (UBSAN_OPTIONS only — build flags unchanged).
+          # Single-flag, single-variable diff from 5b':
+          # -fstack-protector-strong added to CFLAGS at compile
+          # AND link (parity with production's same-flags-at-both
+          # pattern; link-side is technically a no-op but the
+          # bisection reproduces production as production
+          # produces it, not as a minimal counterfactual).
+          # Nothing else changes; UBSAN_OPTIONS stays at
+          # halt_on_error=0 so the "both fire" outcome shows both
+          # diagnostics cleanly.
           #
-          # Build-flag audit (confirm no override of UBSan's
-          # default recover-handler behaviour, same shape as the
-          # _FORTIFY_SOURCE audit before run 4a):
-          #   - No -fno-sanitize-recover anywhere in the workflow
-          #     or Makefile (grep verified pre-push).
-          #   - No -fsanitize-trap=undefined or
-          #     -fsanitize-undefined-trap-on-error anywhere.
-          #   - Build is per-file inline clang in this workflow,
-          #     not through the Makefile, so no CFLAGS_BASE
-          #     inheritance.
-          # Clang's defaults for -fsanitize=undefined are
-          # recover-handler-on and no-trap, so UBSAN_OPTIONS
-          # halt_on_error=0 will be honored.
+          # Build-flag audit (confirm no other HARDENING flags
+          # leak in, same shape as the audits before 4a and 5b'):
+          #   - No -fstack-clash-protection anywhere in workflow.
+          #   - No -fcf-protection anywhere in workflow.
+          #   - No -ftrivial-auto-var-init anywhere in workflow.
+          #   - No -fno-strict-overflow anywhere in workflow.
+          #   - No -fstack-protector-strong already present
+          #     (would indicate inheritance from elsewhere).
+          # Build is per-file inline clang, not Makefile-driven,
+          # so no CFLAGS_BASE inheritance. The flag added here is
+          # the only HARDENING variable in play.
+          #
+          # H0' framing broadened: production (run 3) shows BOTH
+          # sanitisers suppressed on the line-55 mutant
+          # (status=2, empty stderr), not just ASan. Success
+          # condition for 5a-split runs is "both stop firing",
+          # not "ASan stops firing". A flag that suppresses only
+          # ASan is a partial contributor, not a full H0'
+          # reproduction.
           #
           # Verdict for line-51 cxx_ge_to_gt (filter SQLite by
-          # line_number = 51 AND mutator = 'cxx_ge_to_gt'). Pre-
-          # stated as (status_code, stderr_content) pairs:
+          # line_number = 51 AND mutator = 'cxx_ge_to_gt'). Five
+          # interpretive cells, pre-stated as (status_code,
+          # stderr_content) pairs:
           #
-          #   (2, stderr contains UBSan diagnostic only, no ASan):
-          #     UBSan logged, execution continued, ASan did not
-          #     trip on the write. ASan suppression CONFIRMED. H0'
-          #     candidate (narrowed by 5b's build variables):
-          #     mull+ASan+UBSan compose at -O0 with no HARDENING
-          #     suppresses ASan stack-instrumentation specifically;
-          #     UBSan's bounds-check instrumentation is NOT
-          #     suppressed. This is a stopping point for the
-          #     bisection — production-reproduction (run 3) has a
-          #     partial explanation; the next investigation layer
-          #     is "why does UBSan's bounds check not always fire
-          #     in production" rather than continuation of the
-          #     current additive bisection.
+          #   CELL 1 (2, stderr empty):
+          #     Full H0' reproduction. -fstack-protector-strong
+          #     is SUFFICIENT to suppress both sanitisers in the
+          #     bare-stub compose at -O0. Sufficiency does not
+          #     imply uniqueness; subsequent HARDENING flags
+          #     might also be sufficient on their own, or stkprot
+          #     may be one of several contributing variables in
+          #     production. Bisection has reached a reportable
+          #     finding even if it doesn't fully characterise
+          #     production. Pause and write up.
           #
-          #   (1, UBSan diagnostic followed by AddressSanitizer
-          #       block + "ABORTING"):
-          #     UBSan logged, ASan tripped on the subsequent
-          #     write. Neither sanitiser is suppressed in the bare
-          #     stub. UBSan-in-compose is NOT the H0' carrier.
-          #     Advance to 5a-split (HARDENING per-flag: 5a-stkprot,
-          #     5a-autovarinit, 5a-stkclash, 5a-cfprot — four
-          #     single-variable runs, each with its own pre-stated
-          #     verdict mapping written before firing).
+          #   CELL 2 (1, UBSan diagnostic only, no ASan block,
+          #           no "ABORTING"):
+          #     Partial reproduction. UBSan still fires, ASan
+          #     suppressed. -fstack-protector-strong is a
+          #     NECESSARY-BUT-NOT-SUFFICIENT contributor to H0'
+          #     (suppresses ASan stack-instrumentation
+          #     specifically). Production has additional
+          #     contributor(s) that also suppress UBSan.
+          #     Bisection model shifts from "find the carrier"
+          #     to "find the contributing set": next run is
+          #     5a-stkprot + 5a-autovarinit cumulatively (testing
+          #     "does this flag, ADDED to stkprot, advance H0'
+          #     reproduction further", not "is this flag a
+          #     contributor in isolation"). Sufficiency-vs-
+          #     necessity of individual flags within the
+          #     contributing set may need a separate post-
+          #     cumulative-bisection phase to characterise.
           #
-          #   (1, UBSan diagnostic only + SIGABRT, no ASan):
-          #     UBSan logged but the process aborted anyway
-          #     despite halt_on_error=0. Investigate. Possible
-          #     mechanisms: clang version-specific default
-          #     overrides the runtime option, an inherited
-          #     compile-time recover/trap flag the audit missed,
-          #     or a UBSan handler behaviour for this specific
-          #     check (bounds) that doesn't honor halt_on_error.
-          #     Not interpretable as H0' evidence until the abort
-          #     mechanism is identified.
+          #   CELL 3 (1, ASan diagnostic block + "ABORTING", no
+          #           UBSan diagnostic):
+          #     Surprising partial. ASan still fires but UBSan
+          #     suppressed by stkprot. 5b' established UBSan
+          #     fires reliably in the bare stub WITHOUT stkprot;
+          #     if it stops firing with stkprot added, that's an
+          #     interaction between stkprot's stack-layout
+          #     reordering and UBSan's bounds-check
+          #     instrumentation, not an ASan-suppression story.
+          #     STRONGER PAUSE than cells 2 or 4: continuing the
+          #     H0' bisection without characterising this
+          #     interaction would mean carrying an
+          #     uncharacterised variable through subsequent runs,
+          #     compounding attribution uncertainty downstream.
+          #     The bisection model's assumption (variables
+          #     compose additively with sanitiser instrumentation)
+          #     is wrong for this flag combination; characterise
+          #     before continuing.
           #
-          #   (2, stderr empty — neither sanitiser fired):
-          #     UBSan-in-compose IS the H0' carrier (its bounds
-          #     check fired in 5b but not in 5b' — same code path,
-          #     only difference is halt_on_error). Two sub-cases:
-          #     (a) UBSAN_OPTIONS environment suppressing the
-          #         diagnostic too — investigate UBSAN_OPTIONS
-          #         interactions.
-          #     (b) Build flag (e.g. inherited -fsanitize-trap
-          #         the audit missed) suppressing the diagnostic
-          #         at compile time — rebuild with explicit
-          #         -fno-sanitize-trap and re-run.
+          #   CELL 4 (1, UBSan diagnostic then ASan block +
+          #           "ABORTING", two cleanly separated blocks
+          #           like 5b'):
+          #     No effect on either sanitiser. -fstack-protector-
+          #     strong is NOT a contributor to H0' in the bare
+          #     stub at -O0 with this test surface. Eliminate;
+          #     advance to 5a-autovarinit as the next single-
+          #     variable additive run (strict sequencing).
           #
-          #   (1, INTERLEAVED diagnostics: lines mixed beyond
-          #       clean block separation):
-          #     Same as 5b: needs follow-up rather than guessing
-          #     first-fired.
+          #   CELL 5 (any, INTERLEAVED diagnostics):
+          #     Attribution not safe; treat as needs-follow-up
+          #     rather than guessing first-fired.
           #
           #   (4, _), (5, _), (3, _):
           #     Attribute from stderr column, not from status
           #     name.
           #
-          # Line-47 prediction: cxx_ge_to_gt AND cxx_ge_to_lt
-          # both expected to remain status=2 with empty stderr in
-          # 5b' (parity, same as 4a and 5b). Post-run check both
-          # mutators; a divergence between them at line-47 (one
-          # flips status, the other doesn't) is a surprising
-          # result the verdict mapping does not enumerate.
+          # Line-47 invariance: cxx_ge_to_gt AND cxx_ge_to_lt
+          # both expected to remain status=2 with empty stderr
+          # (parity, same as 4a, 5b, 5b'). Post-run check both
+          # mutators; a divergence between the two at line-47,
+          # or a flip from the baseline, is a surprising result
+          # the verdict mapping does not enumerate.
+          #
+          # Load-bearing assumption (worth confirming pre-
+          # writeup, not blocking 5a-stkprot): run 3's status=2
+          # on the line-55 mutant reflects suppression of both
+          # sanitisers on the OOB write, not the test surface
+          # failing to exercise the OOB path. The most plausible
+          # reading of run 3's evidence given test_util_validators
+          # .c's test structure, but if the writeup turns up
+          # contradicting evidence, the pre-planned verification
+          # is: modify test_util_validators.c to deliberately
+          # plant a buffer-boundary input that exercises the
+          # core[in_len] = '\0' write under production CFLAGS,
+          # then observe whether either sanitiser fires. If
+          # neither fires, suppression is real; if one or both
+          # fire, the assumption is wrong and the production
+          # "suppression" is actually "test doesn't reach the
+          # bug".
           CLANG="clang-${MULL_LLVM_MAJOR}"
           PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
-          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0"
+          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0 -fstack-protector-strong"
           $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
           $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
-          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer \
+          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer -fstack-protector-strong \
               /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
               -o stub_compose_suppression.mull
 
