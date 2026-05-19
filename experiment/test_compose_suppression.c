@@ -1,43 +1,37 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Run 4a: test redesigned so ASan stack-instrumentation is the
- * sole kill signal for the line-B (sizeof(core)) mutant.
+ * Test wrapper for the mull+ASan stack-instrumentation
+ * suppression investigation. Design is signal-path-agnostic:
+ * no return-value assertions, main returns 0 unconditionally.
+ * The only paths to non-zero exit come from runtime
+ * instrumentation tripping (ASan, UBSan, fortify, ...) — what
+ * those paths are depends on the build flags, which vary
+ * per-run.
  *
- * Runs 1-2's tests asserted on the boundary call's return value,
- * which conflated assertion-kill with ASan-kill (both produce
- * status=1 in mull's SQLite report). Run 2's H0 falsification
- * rested on that conflation and does not hold; this run is the
- * first unambiguous H0 test in the investigation.
+ * Per-run interpretation (which signals are active, what
+ * (status_code, stderr_content) pairs mean, and what
+ * evidentiary gaps a run cannot resolve) lives in the
+ * workflow's build-step comment for that run. The test file
+ * deliberately does not encode a verdict mapping: 4a learned
+ * that build-config-dependent mappings in this file age poorly
+ * across runs. The lesson — pre-state verdict mappings in
+ * empirical-observable form per run, not as a stable shared
+ * mapping in the test file — is codified in
+ * docs/MUTATION_ASAN_INVESTIGATION_2.md after the
+ * investigation concludes.
  *
- * Boundary trace: input is 64 'x' + NUL, out_sz 128.
+ * Boundary trace (invariant across runs):
+ *   Input: 64 'x' + NUL, out_sz 128.
  *   Original line B (>=): 64 >= 64 true, return -1, no OOB write.
  *   Mutant line B (>):    64 > 64 false, fall through, write
  *                         core[64] one byte past the stack array.
  *
- * Verdict mapping for the line-51 cxx_ge_to_gt mutant
- * (filter SQLite by line_number = 51, not just by mutator):
- *   status=4 (Crashed):  ASan aborted on core[64] — H0 falsified.
- *   status=2 (Passed):   no abort, mutant survived — H0 holds.
- *   status=3 (Timedout): if mutation-report.txt shows ASan
- *                        diagnostic output, treat as status=4;
- *                        otherwise investigate. ASan symbolisation
- *                        before abort is the slow path the
- *                        --minimum-timeout 5000 commit addressed.
- *   status=1 (Failed):   the audit missed a signal path other
- *                        than ASan-induced abort; the result is
- *                        not interpretable, redesign before
- *                        re-running.
- *
- * Line 47's cxx_ge_to_gt mutant is equivalent on this test
+ * Line-47's cxx_ge_to_gt mutant is equivalent on this test
  * surface (in_len = 5 and in_len = 64 both produce the same
- * branch outcome under either operator), so it will appear as a
- * second status=2 survivor regardless of H0. Not the H0 carrier.
- *
- * Build must use -fsanitize=address only, not address,undefined:
- * UBSan's bounds check fires on core[64] before ASan's red zone
- * and would produce status=4 from a non-ASan signal. The
- * workflow's per-file compile drops the 'undefined' component
- * for this run.
+ * branch outcome under either operator), so it appears as a
+ * status=2 survivor regardless of which sanitiser fires at
+ * line B. Filter SQLite by line_number = 51 when reading the
+ * H0' verdict.
  */
 
 #include <stddef.h>

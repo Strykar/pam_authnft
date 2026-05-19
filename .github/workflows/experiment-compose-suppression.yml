@@ -58,43 +58,87 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build stub_compose_suppression.mull (run 4a — ASan-only, bare stub)
+      - name: Build stub_compose_suppression.mull (run 5b — UBSan re-added, bare stub)
         run: |
-          # Run 4a: first unambiguous H0 test. Runs 1-2's H0
-          # falsification rested on conflating assertion-kill with
-          # ASan-kill (both produce status=1). Run 3 reproduced the
-          # suppression in production but didn't isolate which
-          # variable carries it.
+          # Run 5b: re-add -fsanitize=undefined to the bare stub.
+          # Run 4a falsified H0-as-originally-stated; H0' (the
+          # production suppression that 4a does not reproduce) is
+          # open. Bisect additively from 4a toward production, one
+          # variable per run. 5b adds back the variable 4a dropped
+          # for signal isolation.
           #
-          # Two coupled changes from the run-1 baseline, both serving
-          # signal isolation:
-          #   1. -fsanitize=address only (not address,undefined):
-          #      UBSan's bounds check on core[64] would fire before
-          #      ASan's red zone and produce status=4 from a non-ASan
-          #      signal. Drop it for this run.
-          #   2. Test redesigned (test_compose_suppression.c) to
-          #      remove return-value assertions at the boundary, so
-          #      ASan abort is the only path to non-zero exit.
+          # Single-flag, single-variable diff from 4a:
+          #   -fsanitize=address → -fsanitize=address,undefined
+          # in both compile and link. Nothing else changes.
           #
-          # Bare flags: no HARDENING, no _FORTIFY_SOURCE, -O0. The
-          # only stack-instrumentation in play is ASan's; any kill
-          # of the line-51 mutant attributes unambiguously to ASan
-          # firing on the OOB write at core[in_len].
+          # Bare flags otherwise: no HARDENING, no _FORTIFY_SOURCE,
+          # -O0. Test file unchanged (decoupled from per-build
+          # interpretation; verdict mapping lives here).
           #
-          # Verdict (filter SQLite by line_number = 51, mutator =
-          # cxx_ge_to_gt — line-47 is equivalent on this surface):
-          #   status=4: H0 falsified, compose does not suppress ASan.
-          #   status=2: H0 holds, compose suppresses ASan stack
-          #             instrumentation under mull's pass plugin.
-          #   status=3: check mutation-report.txt for ASan output;
-          #             treat as status=4 if present.
-          #   status=1: signal-path leak, design unclean, redesign.
+          # Verdict for line-51 cxx_ge_to_gt (filter SQLite by
+          # line_number = 51 AND mutator = 'cxx_ge_to_gt'). Pre-
+          # stated as (status_code, stderr_content) pairs, not as
+          # status-name semantics:
+          #
+          #   (2, empty):
+          #     Mutant survived. H0' candidate, narrowed by 5b's
+          #     variables: mull+ASan+UBSan compose at -O0 with no
+          #     HARDENING suppresses both sanitisers' runtime
+          #     checks on stack OOB writes. Further hedges may
+          #     apply depending on which subsequent runs confirm
+          #     or narrow the carrier.
+          #
+          #   (1, "AddressSanitizer: stack-buffer-overflow" +
+          #       "ABORTING", no UBSan diagnostic):
+          #     ASan tripped, UBSan did not preempt. UBSan-in-
+          #     compose is not the H0' carrier in the bare stub.
+          #     Advance to 5a-split (HARDENING per-flag) or 5c (TU
+          #     expansion).
+          #
+          #   (1, "runtime error:" or "UndefinedBehaviorSanitizer"
+          #       diagnostic, no ASan diagnostic):
+          #     UBSan tripped, preempted ASan. ASan suppression
+          #     status not determined by this run alone. Pre-
+          #     planned follow-up 5b': drop abort_on_error from
+          #     UBSAN_OPTIONS so UBSan logs but doesn't terminate,
+          #     letting ASan get a turn. 5b' has its own verdict
+          #     mapping, written before firing, not inherited.
+          #
+          #   (1, BOTH diagnostics as cleanly separated blocks):
+          #     First complete diagnostic block by line order of
+          #     the "ERROR:" or "runtime error:" anchor determines
+          #     kill attribution. Second block is evidence the
+          #     second sanitiser was not suppressed at this site.
+          #
+          #   (1, INTERLEAVED diagnostics: lines from both mixed
+          #       beyond clean block separation):
+          #     Attribution not safe from this run. Stderr writes
+          #     are not atomically synchronised across sanitiser
+          #     handlers writing on the same fault. Treat as the
+          #     "needs follow-up" case (see 5b' above) rather than
+          #     guessing first-fired.
+          #
+          #   (4, _), (5, _), (3, _):
+          #     Different mull encoding for some kill condition.
+          #     Attribute from stderr column, not from status
+          #     name. 4a established status=1 + exit_status=-1 is
+          #     mull-0.34's encoding for signal-terminated;
+          #     status=4 is some narrower condition not yet
+          #     characterised.
+          #
+          # Line-47 prediction: cxx_ge_to_gt and cxx_ge_to_lt
+          # expected to remain status=2 survivors (equivalent on
+          # this test surface regardless of which sanitiser fires
+          # at line 51). Post-run check: confirm line-47 status
+          # did not flip between 4a and 5b. A flip would be a
+          # surprising result this verdict mapping does not
+          # enumerate; re-examine before interpreting H0'.
           CLANG="clang-${MULL_LLVM_MAJOR}"
           PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
-          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address -fno-omit-frame-pointer -g -grecord-command-line -O0"
+          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address,undefined -fno-omit-frame-pointer -g -grecord-command-line -O0"
           $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
           $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
-          $CLANG -fsanitize=address -fno-omit-frame-pointer \
+          $CLANG -fsanitize=address,undefined -fno-omit-frame-pointer \
               /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
               -o stub_compose_suppression.mull
 
