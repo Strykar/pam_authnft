@@ -320,14 +320,14 @@ MULL_OBJS = $(OBJ_DIR)/test_suite.mull.o \
 
 $(OBJ_DIR)/%.mull.o: src/%.c include/authnft.h | .mull-preflight
 	@mkdir -p $(OBJ_DIR)
-	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) \
+	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) $(MULL_EXTRA_CFLAGS) \
 	    -g -grecord-command-line \
 	    $(CFLAGS_BASE) `$(PKG_CONFIG) --cflags $(LIBS)` -O0 \
 	    -c $< -o $@
 
 $(OBJ_DIR)/test_suite.mull.o: tests/test_suite.c include/authnft.h | .mull-preflight
 	@mkdir -p $(OBJ_DIR)
-	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) \
+	$(MULL_CLANG) -fpass-plugin=$(MULL_IR_FRONTEND) $(MULL_EXTRA_CFLAGS) \
 	    -g -grecord-command-line \
 	    $(CFLAGS_BASE) `$(PKG_CONFIG) --cflags $(LIBS)` -O0 \
 	    -c $< -o $@
