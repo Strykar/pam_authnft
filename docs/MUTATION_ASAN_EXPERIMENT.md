@@ -183,63 +183,133 @@ sandbox-free binaries, and the validator PRs (PR #49 for
 nft-validator, PR #50 for util-validator) shipped per-PR
 mutation workflows based on that finding. Running those workflows in CI surfaced four
 findings that refine or bound the original verdict. The first
-three are operational configuration knobs; the fourth is the
-first **epistemic bound** on what this compose can detect.
+three are operational configuration knobs; the fourth was
+originally framed as an epistemic bound on what this compose
+can detect. The fourth was wrong; a post-experiment
+investigation traced the observation to a Makefile pattern-rule
+omission rather than a sanitiser-compose interaction. The
+supersession is documented in
+[docs/MUTATION_ASAN_INVESTIGATION_2.md](MUTATION_ASAN_INVESTIGATION_2.md)
+and summarised below.
 
-### Finding 4 (headline): compose suppresses ASan stack-instrumentation on stack-OOB writes that don't propagate to return values
+### Finding 4 — superseded by docs/MUTATION_ASAN_INVESTIGATION_2.md
 
-The util-validator-mutation workflow's first useful run on
-PR #50 ([run 26034611767](https://github.com/identd-ng/pam_authnft/actions/runs/26034611767))
-showed a line-55 mutant in
-`util_normalize_ip` (`cxx_ge_to_gt`: `core_len >= sizeof(core)`
-mutated to `core_len > sizeof(core)`) surviving despite a test
-(`test_normalize_core_buffer_boundary`, added in PR #51) that
-catches the mutant cleanly under either gcc+ASan **or**
-clang+ASan **without** mull's pass plugin. In the composed
-`clang-19 -fpass-plugin=/usr/lib/mull-ir-frontend-19
--fsanitize=address,undefined` invocation, ASan does not detect
-the OOB write at `core[64] = '\0'`. Captured mutant stdout:
-`util_validators: all tests passed`. Captured stderr: empty.
-No ASan output at all.
+The originally-headlined Finding 4 framed the line-55 mutant's
+survival in PR #50's first useful run as a **compose
+suppression**: that mull + ASan together silently failed to
+detect ASan-only-observable stack-OOB writes whose effects
+don't propagate to return values. A scoped investigation
+queued under that framing reproduced the observation, ran an
+additive bisection across the HARDENING flag cluster, and at
+the post-individual-phase mechanical-argv-diff step surfaced
+the actual cause: the Makefile's source-TU mull-object rule
+(`$(OBJ_DIR)/%.mull.o: src/%.c`) does not reference
+`$(MULL_EXTRA_CFLAGS)`. The test-TU rule does. So in
+production, `util_validators.mull.o` was compiled with
+HARDENING + pkg-config cflags but with **no sanitiser
+instrumentation**, while `test_util_validators.mull.o` was
+compiled with sanitisers. At runtime both sanitiser runtimes
+were linked, but neither had per-access hooks in the source
+TU to service: the OOB write at `core[in_len] = '\0'` in
+`util_normalize_ip` happened in unsanitised code.
 
-The mutant produces no return-value difference (the function
-returns 0 via the inet_pton-reject path either way), so
-behavioural assertions cannot detect it. The only available
-detection mechanism is ASan's red-zone check on the OOB write,
-which is what the compose suppresses. This is **not** an
-equivalent mutant in the classical mutation-testing sense
-(unkillable under any test); it is a detectably-different
-mutant whose only detection mechanism is suppressed by this
-specific tooling combination. The distinction matters because
-"equivalent mutant" suggests a fundamental limit, while this
-finding is tooling-specific and the queued investigation may
-yet identify a way around it.
+There was no compose suppression. There was a Makefile
+pattern-rule omission that left the source TU unsanitised.
 
-**This bounds the experiment's "compose works for sandbox-free
-binaries" verdict.** Compose works for IR-instruction-level
-mutations whose effects propagate to return values. It silently
-suppresses ASan's detection of stack-OOB-write mutations whose
-effects don't propagate to return values. The validator
-binaries are subject to this bound; the suppression mechanism
-is unconfirmed but reproducible.
+Empirical confirmation: a one-line fix propagating
+`$(MULL_EXTRA_CFLAGS)` to the source-TU rule, run against
+the canonical util-validator-mutation.yml via workflow_dispatch
+on the experiment branch ([run 26099584194](https://github.com/identd-ng/pam_authnft/actions/runs/26099584194)),
+killed every mutant: **35/35 status=1, up from 34/35 = 97.1%
+pre-fix**. The line-55 cxx_ge_to_gt mutant — previously the
+sole survivor — is now killed with a UBSan bounds-check
+diagnostic on the access site at `src/util_validators.c:57:5`
+(the array index reference; the mutation point itself is at
+line 55:18, the `>=` operator).
 
-Practical implication for future readers: a mull-killed-mutant
-count of N% does not mean N% of mutations are detected. It
-means N% of mutations that produce return-value-observable
-behavioural differences are detected. OOB-write mutations
-whose effects are observable only via ASan are a separate
-class, currently unkillable in this compose setup. The fuzz
-harnesses (`fuzz_username`, `fuzz_cgroup_path`) cover the
-OOB-write surface for those specific functions independently
-of mull; the two oracles are genuinely complementary, not
-overlapping.
+#### Implications
 
-A scoped investigation is queued to determine whether the
-suppression generalises across all stack-OOB-write mutations
-or only specific patterns, whether pass-plugin CLI order
-matters, whether heap allocations are affected. Sub-questions
-are tractable with a small stub binary and flag variations;
-not in this doc's current scope.
+- **PR #51's compose-suppression-finding framing** was the
+  wrong framing for the underlying observation. The patterns
+  PR #51 codified (version-script, unconditional-extern,
+  per-PR-mutation workflow) are still correct as far as they
+  go; the empirical bound the convention claimed to have was
+  wrong. PR #51's body is permanent (squashed merge); this
+  section is the supersession of record.
+
+- **Mutation score semantics changed; the test surface did
+  not.** Pre-fix the workflow reported 34/35 = 97.1%; post-fix
+  it reports 35/35 = 100%. This is not a coverage improvement.
+  The denominator is unchanged — mull's pass plugin sees the
+  same source-TU IR regardless of sanitiser flags, so the same
+  35 mutants are generated in both regimes. What changed is
+  the kill-mechanism's reach: pre-fix, the sanitiser-only-
+  killable mutants were generated but unkillable (the
+  instrumentation that would catch them was absent from the
+  source TU); post-fix, the same mutants are now reachable by
+  the same assertions plus working sanitiser checks, so they
+  are killed. The metric's underlying semantics shifted from
+  "mutations killed by behavioural assertions" to "mutations
+  killed by behavioural assertions plus sanitiser-detectable
+  runtime errors." Strictly more inclusive measurement, same
+  test surface. The right reading is "we fixed the
+  measurement", not "we added tests" or "we improved coverage
+  by 2.9 percentage points." The original Finding 4's caveat
+  ("a mull-killed-mutant count of N% does not mean N% of
+  mutations are detected") was correct in observation but
+  wrong in cause: the metric did under-count sanitiser-only-
+  killable mutations, but the cause was Makefile-rule
+  omission, not compose-model bound.
+
+- **The full investigation narrative** — including the
+  bisection-under-wrong-premise that produced four
+  internally-consistent eliminations before the
+  mechanical-argv-diff at step (C) reframed the question —
+  lives in
+  [docs/MUTATION_ASAN_INVESTIGATION_2.md](MUTATION_ASAN_INVESTIGATION_2.md).
+  That doc carries the methodological notes the lineage
+  produced, the per-run evidence, and the codified rules
+  (single-fact verification, structural-fact verification,
+  pre-stated empirical-observable verdict mappings, review
+  checkpoints with specific outputs).
+
+- **Out-of-scope follow-ups surfaced by the investigation**:
+  (1) merging the Makefile fix from the experiment branch to
+  main, (2) any downstream consumers that inherited the
+  original Finding 4 framing in their own docs, (3) the
+  `test_suite.mull.o` rule (line 328-333 of the Makefile)
+  has the same MULL_EXTRA_CFLAGS omission; the
+  authnft_test.mull mutation testing pipeline is affected
+  by the same bug. The fix applied in 5c only touches the
+  generic `src/%.c → .mull.o` pattern rule; widening it to
+  test_suite.mull.o is a separate trivial commit.
+
+#### Original framing (preserved for historical context; do not cite as a current bound)
+
+> The util-validator-mutation workflow's first useful run on
+> PR #50 ([run 26034611767](https://github.com/identd-ng/pam_authnft/actions/runs/26034611767))
+> showed a line-55 mutant in
+> `util_normalize_ip` (`cxx_ge_to_gt`: `core_len >= sizeof(core)`
+> mutated to `core_len > sizeof(core)`) surviving despite a test
+> (`test_normalize_core_buffer_boundary`, added in PR #51) that
+> catches the mutant cleanly under either gcc+ASan **or**
+> clang+ASan **without** mull's pass plugin. In the composed
+> `clang-19 -fpass-plugin=/usr/lib/mull-ir-frontend-19
+> -fsanitize=address,undefined` invocation, ASan does not detect
+> the OOB write at `core[64] = '\0'`. Captured mutant stdout:
+> `util_validators: all tests passed`. Captured stderr: empty.
+> No ASan output at all.
+>
+> The mutant produces no return-value difference (the function
+> returns 0 via the inet_pton-reject path either way), so
+> behavioural assertions cannot detect it. The only available
+> detection mechanism is ASan's red-zone check on the OOB write,
+> which is what the compose suppresses.
+>
+> [Original section continued with practical implications and
+> a queued investigation. The queued investigation produced
+> docs/MUTATION_ASAN_INVESTIGATION_2.md and the supersession
+> above. Remainder elided.]
 
 ### Finding 1: survivor audit as a recurring artefact
 
