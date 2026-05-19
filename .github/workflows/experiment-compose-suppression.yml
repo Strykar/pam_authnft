@@ -41,16 +41,11 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          # Cluster matches util-validator-mutation.yml's install
-          # step. The bare stub from runs 1-2 didn't need these, but
-          # run 3 builds the actual production source which
-          # transitively includes authnft.h's PAM/nftables/seccomp/
-          # systemd/cap/audit headers.
+          # Run 4a reverts to the bare stub; the production-header
+          # cluster from run 3 is not needed. Only the mull repo
+          # install dependencies remain.
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libnftables-dev libseccomp-dev libsystemd-dev \
-            libpam0g-dev libcap-dev libaudit-dev \
             curl gnupg ca-certificates
 
       - name: Install mull and matching clang
@@ -63,27 +58,45 @@ jobs:
               "mull-${MULL_LLVM_MAJOR}" "clang-${MULL_LLVM_MAJOR}"
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
-      - name: Build test_util_validators.mull (run 3 — production source via Makefile)
-        env:
-          MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: Build stub_compose_suppression.mull (run 4a — ASan-only, bare stub)
         run: |
-          # Run 3: H0 falsified by run 2 (7c1a90d) — adding HARDENING
-          # flags to the bare stub did not produce the suppression.
-          # Pivot to the production source. Build test_util_validators
-          # .mull via the Makefile target used by util-validator-
-          # mutation.yml in production. This is the most direct test:
-          # if the suppression reproduces in this workflow with the
-          # production source + production build path, the
-          # investigation has a self-contained reproducer and can
-          # bisect downward (strip pieces from the production state
-          # until the suppression disappears).
+          # Run 4a: first unambiguous H0 test. Runs 1-2's H0
+          # falsification rested on conflating assertion-kill with
+          # ASan-kill (both produce status=1). Run 3 reproduced the
+          # suppression in production but didn't isolate which
+          # variable carries it.
           #
-          # If line-55 of src/util_validators.c (cxx_ge_to_gt) shows
-          # as Passed (status=2), reproducer confirmed. If it shows
-          # as Failed (status=1), something about the validator
-          # workflow's CI environment specifically — not the source
-          # or the build flags — drives the suppression.
-          make test_util_validators.mull
+          # Two coupled changes from the run-1 baseline, both serving
+          # signal isolation:
+          #   1. -fsanitize=address only (not address,undefined):
+          #      UBSan's bounds check on core[64] would fire before
+          #      ASan's red zone and produce status=4 from a non-ASan
+          #      signal. Drop it for this run.
+          #   2. Test redesigned (test_compose_suppression.c) to
+          #      remove return-value assertions at the boundary, so
+          #      ASan abort is the only path to non-zero exit.
+          #
+          # Bare flags: no HARDENING, no _FORTIFY_SOURCE, -O0. The
+          # only stack-instrumentation in play is ASan's; any kill
+          # of the line-51 mutant attributes unambiguously to ASan
+          # firing on the OOB write at core[in_len].
+          #
+          # Verdict (filter SQLite by line_number = 51, mutator =
+          # cxx_ge_to_gt — line-47 is equivalent on this surface):
+          #   status=4: H0 falsified, compose does not suppress ASan.
+          #   status=2: H0 holds, compose suppresses ASan stack
+          #             instrumentation under mull's pass plugin.
+          #   status=3: check mutation-report.txt for ASan output;
+          #             treat as status=4 if present.
+          #   status=1: signal-path leak, design unclean, redesign.
+          CLANG="clang-${MULL_LLVM_MAJOR}"
+          PLUGIN="/usr/lib/mull-ir-frontend-${MULL_LLVM_MAJOR}"
+          CFLAGS="-fpass-plugin=$PLUGIN -fsanitize=address -fno-omit-frame-pointer -g -grecord-command-line -O0"
+          $CLANG $CFLAGS -c experiment/stub_compose_suppression.c -o /tmp/stub_compose.mull.o
+          $CLANG $CFLAGS -c experiment/test_compose_suppression.c -o /tmp/test_compose.mull.o
+          $CLANG -fsanitize=address -fno-omit-frame-pointer \
+              /tmp/stub_compose.mull.o /tmp/test_compose.mull.o \
+              -o stub_compose_suppression.mull
 
       - name: Run mull-runner
         id: mull
@@ -98,7 +111,7 @@ jobs:
               --reporters IDE --reporters SQLite \
               --report-dir . \
               --report-name compose-suppression \
-              ./test_util_validators.mull > mutation-report.txt 2>&1
+              ./stub_compose_suppression.mull > mutation-report.txt 2>&1
           ec=$?
           set -e
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
