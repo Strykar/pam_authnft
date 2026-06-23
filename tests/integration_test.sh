@@ -243,8 +243,8 @@ for FIELD in '"v":2' '"cg_path":"authnft.slice/authnft-' "\"user\":\"$TEST_USER\
     fi
 done
 PERMS=$(stat -c '%a %U:%G' "$SESSION_FILE")
-if [[ "$PERMS" != "644 root:root" ]]; then
-    fail "Session file wrong permissions: got '$PERMS', expected '644 root:root'"
+if [[ "$PERMS" != "640 root:authnft" ]]; then
+    fail "Session file wrong permissions: got '$PERMS', expected '640 root:authnft'"
 fi
 rm -f "$SESSION_FILE"
 # Half 2: open+close in the SAME handle. close_session must remove the file.
@@ -590,9 +590,20 @@ if echo "$TABLE_STATE" | grep -qE '(chain|set) session_'; then
     fail "10.14: per-session nft state leaked after failed open_session (A1 regression)"
 fi
 
-# Assert no transient scope under authnft.slice survives.
-LEAKED_SCOPES=$(systemctl list-units --all --no-legend --type=scope 'authnft-*.scope' 2>/dev/null \
-    | awk '{print $1}' | grep -v '^$' || true)
+# Assert the module's own transient scope is rolled back. Two things to
+# get right: (1) scope the glob to THIS user's unit name
+# (authnft-<user>-<pid>.scope) so the persistent probe scopes that
+# 10.11-10.13 stand up as scaffolding are not counted as a module leak;
+# (2) bus_handler_stop issues StopUnit, which systemd runs asynchronously,
+# so poll briefly for the scope to clear rather than reading it once.
+LEAKED_SCOPES=""
+for _ in $(seq 1 25); do
+    LEAKED_SCOPES=$(systemctl list-units --all --no-legend --type=scope \
+        "authnft-${TEST_USER}-*.scope" 2>/dev/null \
+        | awk '{print $1}' | grep -v '^$' || true)
+    [[ -z "$LEAKED_SCOPES" ]] && break
+    sleep 0.2
+done
 if [[ -n "$LEAKED_SCOPES" ]]; then
     echo "leaked scopes: $LEAKED_SCOPES" >&2
     fail "10.14: systemd scope leaked after failed open_session (A2 regression)"
@@ -751,7 +762,7 @@ fi
 
 # Confirm all eight rules were committed to the per-session chain.
 SESSION_CHAIN=$(nft list table inet authnft 2>/dev/null | \
-    awk '/chain session_/ {gsub(/[{} ]/,""); print $2; exit}')
+    awk '/chain session_/ {gsub(/[{}]/,"",$2); print $2; exit}')
 if [[ -z "$SESSION_CHAIN" ]]; then
     fail "10.16: per-session chain not found after open_session"
 fi
