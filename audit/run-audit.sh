@@ -56,7 +56,8 @@ PAM
 note "build: production .so, ASan fault driver, malloc-fail preload"
 make pam_authnft.so          >/dev/null 2>/tmp/b1.log || { bad "build .so";          cat /tmp/b1.log; }
 make audit/nft_fault_driver  >/dev/null 2>/tmp/b2.log || { bad "build fault driver"; cat /tmp/b2.log; }
-make audit/malloc_fail.so    >/dev/null 2>/tmp/b3.log || { bad "build preload";      cat /tmp/b3.log; }
+make audit/malloc_fail.so    >/dev/null 2>/tmp/b3.log || { bad "build malloc preload"; cat /tmp/b3.log; }
+make audit/nft_fail.so       >/dev/null 2>/tmp/b4.log || { bad "build nft preload";    cat /tmp/b4.log; }
 [ "$FAIL" -eq 0 ] || { note "AUDIT RESULT: FAIL (build)"; exit 1; }
 
 # --- detector configuration ---
@@ -79,7 +80,7 @@ leak:_nss
 leak:pam_start
 leak:pam_modutil
 SUPP
-export ASAN_OPTIONS="detect_leaks=1:exitcode=1:halt_on_error=1:abort_on_error=0:print_summary=1"
+export ASAN_OPTIONS="detect_leaks=1:exitcode=1:halt_on_error=1:abort_on_error=0:print_summary=1:log_path=/tmp/asan_authnft"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:exitcode=1"
 export LSAN_OPTIONS="suppressions=/tmp/lsan.supp:print_suppressions=0"
 # The fault driver calls nft_handler_setup directly and never installs
@@ -87,39 +88,57 @@ export LSAN_OPTIONS="suppressions=/tmp/lsan.supp:print_suppressions=0"
 # fighting the filter (seccomp + valgrind syscall interception tangle).
 export AUTHNFT_NO_SANDBOX=1
 
-# Run a scenario under the sanitizer. `scope=yes` runs the driver inside a
-# real transient scope at authnft.slice/authnft-audit.scope so the cgroupv2
-# path the module references actually resolves and call 1 can reach the
-# success path (exercising the post-call-1 returns and the success free
-# under LSan). `scope=no` runs it bare, so call 1 fails on the missing
-# cgroup — which is itself a useful error-path (the call-1-failure return,
-# where CID 1659576's live sibling leak lived).
+# Run a fault scenario under the sanitizer. Args:
+#   $1 label    human label for the return being driven
+#   $2 scen     driver scenario (happy|truncate|nftfail)
+#   $3 scope    yes -> run inside a real transient scope so call 1 can
+#               succeed (needed to reach the post-call-1 returns); no -> bare
+#   $4 preload  optional interposer .so under audit/ (e.g. nft_fail.so)
+#   $5 extraenv optional extra env for the interposer (e.g. AUTHNFT_NFT_FAIL_ON=jump)
+# The sanitizer owns the verdict (non-zero exit on a definite leak / UB).
 run_scen() {
-    local scen="$1" scope="${2:-no}"
+    local label="$1" scen="$2" scope="$3" preload="${4:-}" extra="${5:-}"
     nft delete table inet authnft 2>/dev/null || true
-    note "fault scenario: $scen (scope=$scope)  (ASan + UBSan + LSan)"
-    local rc=0
+    note "fault scenario: $label (scope=$scope)  (ASan + UBSan + LSan)"
+    local rc=0 pre="" out="/tmp/scen-$label.out"
+    # The driver is ASan-instrumented; ASan requires its runtime to come
+    # first in the preload list. So when adding an interposer, preload the
+    # real libasan ahead of it (resolved from the driver's own ldd, since
+    # gcc -print-file-name=libasan.so returns a linker script on Fedora).
+    if [ -n "$preload" ]; then
+        local libasan
+        libasan="$(ldd ./audit/nft_fault_driver 2>/dev/null | awk '/libasan/{print $3; exit}')"
+        pre="LD_PRELOAD=${libasan}:$PWD/audit/$preload"
+    fi
     if [ "$scope" = yes ]; then
         systemd-run --scope --quiet --slice=authnft.slice --unit=authnft-audit \
             --property=Delegate=yes \
-            ./audit/nft_fault_driver "$scen" "$USER_AUDIT" || rc=$?
+            env $pre $extra ./audit/nft_fault_driver "$scen" "$USER_AUDIT" \
+            >"$out" 2>&1 || rc=$?
     else
-        ./audit/nft_fault_driver "$scen" "$USER_AUDIT" || rc=$?
+        env $pre $extra ./audit/nft_fault_driver "$scen" "$USER_AUDIT" \
+            >"$out" 2>&1 || rc=$?
     fi
     if [ "$rc" -eq 0 ]; then
-        ok "$scen: no leak, no UB"
+        ok "$label: no leak, no UB"
     else
-        bad "$scen: sanitizer flagged a leak or UB (exit $rc)"
+        bad "$label: sanitizer flagged a leak or UB (exit $rc)"
     fi
     nft delete table inet authnft 2>/dev/null || true
 }
 
-# happy in a real scope -> reaches the success path + the 444 free.
-# truncate/nftfail bare -> drive the error returns (truncate also reports
-# whether the line-311 truncation path is reachable given the field caps).
-run_scen happy yes
-run_scen truncate no
-run_scen nftfail no
+# The five nft_handler_setup error/success returns, each under LSan:
+#   happy        success path + the success free (in a real scope)
+#   truncate     snprintf-truncation return (also reports reachability)
+#   nftfail      call-1-failure return (bare: the cgroup is absent)
+#   call2fail    call-2 (jump-rule) failure return, via the nft interposer
+#   handleparse  handle-parse failure return, via the nft interposer
+# call2fail/handleparse need call 1 to succeed first, hence scope=yes.
+run_scen happy       happy    yes
+run_scen truncate    truncate no
+run_scen nftfail     nftfail  no
+run_scen call2fail   happy    yes nft_fail.so "AUTHNFT_NFT_FAIL_ON=jump"
+run_scen handleparse happy    yes nft_fail.so "AUTHNFT_NFT_CORRUPT_HANDLE=1"
 
 # --- real lifecycle under valgrind (production .so via pamtester) ---
 # The verdict is valgrind's leak report, NOT pamtester's own exit code:

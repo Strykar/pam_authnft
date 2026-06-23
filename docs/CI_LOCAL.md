@@ -30,7 +30,7 @@ returns the happy-path integration suite never takes.
 | Tier | Substrate | Command | What it adds |
 |---|---|---|---|
 | 0 | host / GitHub-hosted | existing workflows | build, cppcheck, CodeQL, unit (non-root), fuzz, mutation, ASan/UBSan build-link |
-| 1 | booted-systemd container (rootful, isolated) | `make audit` | fault driver under ASan/LSan + real pamtester lifecycle under valgrind; **catches the frag_buf class** |
+| 1 | booted-systemd container (rootful, isolated) | `make audit` | unit suite (seccomp SIGSYS enforcement) + all five nft_handler_setup returns under ASan/LSan + real lifecycle under valgrind; **catches the frag_buf class** |
 | 2 | virtme-ng microVM (real kernel, KVM) | `make audit-vm` | same audit under a real kernel + real cgroup hierarchy; optional kernel matrix |
 | 3 | Coverity weekly + local cov-build | (existing) | path-sensitive inter-procedural static backstop |
 
@@ -44,14 +44,21 @@ so its `groupadd`/`useradd`/`nft` writes are ephemeral.
 `audit/nft_fault_driver.c` links the production objects under
 `-fsanitize=address,undefined` and drives `nft_handler_setup`'s returns
 directly, with a real PAM handle so the module's logging is safe. The
-sanitizer — not the script — owns the leak verdict (the process exits
-non-zero if LeakSanitizer finds a definite leak).
+call-2 and handle-parse returns (which need call 1 to succeed first) are
+driven by `audit/nft_fail.so`, an LD_PRELOAD interposer that fails the
+jump-rule command or corrupts the echo handle. The sanitizer — not the
+script — owns the leak verdict (the process exits non-zero if
+LeakSanitizer finds a definite leak). All five returns are leak-free on
+the current tree, and each is proven by negative control (revert its
+`free` and the matching scenario flips red).
 
 | Scenario | Drives | Detector |
 |---|---|---|
 | `happy` (in a real transient scope) | the success path + the success-path free | ASan/LSan |
 | `truncate` (all session fields maxed) | the snprintf-truncation return; also **reports whether that path is reachable** given the struct field caps | ASan/LSan |
 | `nftfail` (pre-created conflicting chain) | the call-1-failure return | ASan/LSan |
+| `call2fail` (jump rule fails, via the nft interposer) | the call-2-failure return | ASan/LSan |
+| `handleparse` (handle marker corrupted, via the nft interposer) | the handle-parse-failure return | ASan/LSan |
 | pamtester open+close | the real production lifecycle | valgrind memcheck |
 
 **Reachability finding.** The `truncate` scenario reports
@@ -81,6 +88,11 @@ Kernel matrix (tier 2):
 KERNELS="host v6.12 v6.6" make audit-vm   # vng downloads upstream kernels
 ```
 
+The `host` kernel needs nothing extra. Upstream kernels (`v6.12` etc.) are
+fetched by virtme-ng as Ubuntu `.deb`s and need `dpkg` on the host to
+unpack them; on Arch, `pacman -S dpkg` first (the host-kernel audit does
+not require it).
+
 commit-time gate (after `make install-hooks`):
 
 ```sh
@@ -100,7 +112,9 @@ stays instant.
 
 ```
 audit/nft_fault_driver.c   fault driver (ASan/UBSan), drives the error returns
-audit/malloc_fail.c        LD_PRELOAD fail-Nth-allocation interposer
+audit/nft_fail.c           LD_PRELOAD libnftables interposer (call-2 / handle-parse)
+audit/malloc_fail.c        LD_PRELOAD fail-Nth-allocation interposer (manual)
+audit/run-all.sh           orchestrator: Part A unit/seccomp + Part C fault matrix
 audit/run-audit.sh         in-substrate orchestrator (container + vng)
 ci/vng-audit.sh            tier-2 microVM runner (host kernel + matrix)
 .githooks/pre-commit       runs tier-1 audit on every code commit
@@ -113,10 +127,16 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
 
 - `happy` runs inside a transient scope; its detailed return code lands in
   the scope's own journal, not the workflow log (cosmetic).
-- The call-2 and handle-parse returns are not yet fault-injected under the
-  ASan driver (they need a libnftables-level fault); they are covered
-  leak-free on the success path under valgrind, and on the call-1 path
-  under ASan. Injecting them is the next refinement.
+- Seccomp enforcement is covered by Part A's unit suite (Stage 2 = a
+  blocked syscall must SIGSYS; Stage 3 = an allowlisted syscall survives),
+  which the audit runs with the sandbox active.
+- The integration suite (16 stages, incl the socket-cgroupv2 stages
+  10.11/10.12) is OPT-IN and EXPERIMENTAL (AUDIT_RUN_INTEGRATION=1, off by
+  default): it has host-environment coupling (umask, file ownership, the
+  host-tuned seccomp allowlist, a degraded systemd in the microVM) that
+  does not survive headless execution in either audit substrate. Making it
+  audit-ready is follow-on work; for now it stays with the existing
+  `make test-integration-container` / `sudo make test-integration`.
 - `audit/malloc_fail.so` (fail-Nth-allocation interposer) is a **manual**
   targeted tool, not part of the automated gate: a blind sweep fails
   loader/libc/PAM startup allocations before any module code, so it cannot

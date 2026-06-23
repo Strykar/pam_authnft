@@ -240,7 +240,11 @@ $(AUDIT_DRIVER): audit/nft_fault_driver.c $(wildcard src/*.c) include/authnft.h
 $(AUDIT_PRELOAD): audit/malloc_fail.c
 	$(CC) -fPIC -shared -O1 -o $@ $< -ldl
 
-audit-build: $(AUDIT_DRIVER) $(AUDIT_PRELOAD)
+AUDIT_NFTFAIL = audit/nft_fail.so
+$(AUDIT_NFTFAIL): audit/nft_fail.c
+	$(CC) -fPIC -shared -O1 -o $@ $< -ldl
+
+audit-build: $(AUDIT_DRIVER) $(AUDIT_PRELOAD) $(AUDIT_NFTFAIL)
 
 # Tier 1 audit inside the booted-systemd container (no host mutation).
 audit-container: RESULT_DIR = $(CURDIR)/.container-result

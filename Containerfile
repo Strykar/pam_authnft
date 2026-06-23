@@ -97,14 +97,14 @@ case "$WORKFLOW" in
         cp -f trace.log trace-claims.log /shared/ 2>/dev/null || true
         ;;
     audit)
-        # Tier-1 fault-matrix audit: drive nft_handler_setup's error
-        # returns under ASan/LSan and the real pamtester lifecycle under
-        # valgrind. The detectors own the leak verdict via their exit
-        # codes; run-audit.sh aggregates and returns non-zero on any
-        # leak or UB. This is the harness that would have caught the
-        # frag_buf leak (CID 1659576).
-        make clean >/dev/null && ./audit/run-audit.sh || EC=$?
+        # Comprehensive local audit: unit suite (seccomp enforcement) +
+        # integration suite (16 stages) + fault matrix (nft_handler_setup
+        # error returns under ASan/LSan + lifecycle under valgrind). Covers
+        # every gate the hosted CI cannot run for want of root/nft/systemd/
+        # cgroup. Aggregated verdict in EC.
+        ./audit/run-all.sh || EC=$?
         cp -f /tmp/vg.log /shared/valgrind.log 2>/dev/null || true
+        cp -f /tmp/asan_authnft.* /tmp/scen-*.out /shared/ 2>/dev/null || true
         ;;
     trace-features)
         make clean && make && make trace-features || EC=$?

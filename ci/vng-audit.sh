@@ -50,8 +50,13 @@ for k in $KERNELS; do
     # --user root: the audit needs root for nft/group/pam.
     # The guest runs the same audit/run-audit.sh; its verdict (exit code)
     # is propagated out by vng.
+    # Runs the reliable A+C audit (unit/seccomp + fault matrix) under a real
+    # kernel. The integration suite (Part B) is opt-in and disabled by
+    # default: it has host-environment coupling that does not survive
+    # headless execution in either audit substrate (see run-all.sh and
+    # docs/CI_LOCAL.md). Set AUDIT_RUN_INTEGRATION=1 to try it.
     if vng "${runspec[@]}" --user root --systemd -p "$CPUS" -m "$MEM" \
-            --exec "cd '$REPO' && ./audit/run-audit.sh"; then
+            --exec "cd '$REPO' && ./audit/run-all.sh"; then
         echo "=== kernel $k: PASS ==="
     else
         echo "=== kernel $k: FAIL ==="

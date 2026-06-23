@@ -18,3 +18,4 @@ docs/audit_scope.txt
 # Local audit harness build artifacts
 audit/nft_fault_driver
 audit/malloc_fail.so
+audit/nft_fail.so
