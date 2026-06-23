@@ -264,6 +264,17 @@ audit-vm:
 audit: audit-container
 audit-all: audit-container audit-vm
 
+# Clang static analyzer (scan-build). Path-sensitive; --status-bugs makes
+# it exit non-zero on any analyzer bug. This is the checker that catches
+# the malloc-leak / use-after-free class — CID 1659576 (frag_buf) was found
+# by scan-build, and GCC -fanalyzer does NOT flag it. Run by analyze.yml in
+# CI; needs clang + clang-tools locally.
+analyze:
+	@command -v scan-build >/dev/null 2>&1 || { \
+	    echo "scan-build not found — install clang-tools"; exit 1; }
+	$(MAKE) clean
+	scan-build --status-bugs --use-cc=clang $(MAKE) pam_authnft.so
+
 # Route git hooks at .githooks/ so code-touching commits run the tier-1 audit.
 install-hooks:
 	git config core.hooksPath .githooks

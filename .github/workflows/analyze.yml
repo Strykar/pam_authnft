@@ -1,0 +1,30 @@
+name: analyze
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+# Clang static analyzer (scan-build) as a fast PR gate. cppcheck is
+# path-insensitive and CodeQL is differently tuned; the one leak this
+# project has shipped (CID 1659576, frag_buf in nft_handler_setup) was
+# found by scan-build run by hand, and by Coverity a week later — nothing
+# blocked it on the PR. scan-build's path-sensitive unix.Malloc/unix.cstring
+# checkers run in well under a minute here and would have. (GCC -fanalyzer
+# was evaluated and does NOT flag this leak; clang's analyzer does.)
+jobs:
+  scan-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install clang analyzer + deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang clang-tools pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
+      - name: scan-build (fail on any analyzer bug)
+        run: make analyze
