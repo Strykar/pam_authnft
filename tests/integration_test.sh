@@ -230,7 +230,7 @@ rm -f /run/authnft/sessions/*.json /run/authnft/sessions/.*.tmp 2>/dev/null || t
 if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session > /dev/null 2>&1; then
     fail "Session file test: open_session failed"
 fi
-SESSION_FILE=$(ls /run/authnft/sessions/*.json 2>/dev/null | head -1)
+SESSION_FILE=$(ls /run/authnft/sessions/*.json 2>/dev/null | head -1 || true)
 if [[ -z "$SESSION_FILE" ]]; then
     fail "No session file created at open_session under /run/authnft/sessions/"
 fi
@@ -280,10 +280,10 @@ sync
 sleep 1
 OPEN_LINE=$(journalctl --after-cursor="$CURSOR" -t pam_authnft \
             --output=json --no-pager 2>/dev/null | \
-            grep '"AUTHNFT_EVENT":"open"' | head -1)
+            grep '"AUTHNFT_EVENT":"open"' | head -1 || true)
 CLOSE_LINE=$(journalctl --after-cursor="$CURSOR" -t pam_authnft \
              --output=json --no-pager 2>/dev/null | \
-             grep '"AUTHNFT_EVENT":"close"' | head -1)
+             grep '"AUTHNFT_EVENT":"close"' | head -1 || true)
 [[ -n "$OPEN_LINE"  ]] || fail "no AUTHNFT_EVENT=open entry after open_session"
 [[ -n "$CLOSE_LINE" ]] || fail "no AUTHNFT_EVENT=close entry after close_session"
 for FIELD in '"AUTHNFT_USER":"'"$TEST_USER"'"' \
@@ -368,12 +368,12 @@ nft add element inet authnft_1011 probe_set \
 # Probe 1: allowed source. Listener in probe scope, connect from 127.0.0.2.
 sh -c '
     echo $$ > /sys/fs/cgroup'"${s1011_scope_path}"'/cgroup.procs
-    echo OK | exec nc -l 127.0.0.1 18081
+    echo OK | exec ncat -l 127.0.0.1 18081
 ' &
 S1011_PIDS+=($!)
 sleep 0.5
 
-timeout 5 nc -w3 127.0.0.1 18081 --source 127.0.0.2 </dev/null >/dev/null 2>&1 || true
+timeout 5 ncat -w3 127.0.0.1 18081 --source 127.0.0.2 </dev/null >/dev/null 2>&1 || true
 CG_PKTS=$(nft list chain inet authnft_1011 input 2>/dev/null \
     | grep 'cg-match' | grep -oP 'packets \K[0-9]+')
 if [[ -z "$CG_PKTS" || "$CG_PKTS" -eq 0 ]]; then
@@ -386,12 +386,12 @@ pass "10.11: cgroup match fired for allowed source ($CG_PKTS packets)"
 PREV_PKTS="$CG_PKTS"
 sh -c '
     echo $$ > /sys/fs/cgroup'"${s1011_scope_path}"'/cgroup.procs
-    echo OK | exec nc -l 127.0.0.1 18081
+    echo OK | exec ncat -l 127.0.0.1 18081
 ' &
 S1011_PIDS+=($!)
 sleep 0.5
 
-timeout 5 nc -w3 127.0.0.1 18081 --source 127.0.0.3 </dev/null >/dev/null 2>&1 || true
+timeout 5 ncat -w3 127.0.0.1 18081 --source 127.0.0.3 </dev/null >/dev/null 2>&1 || true
 CG_PKTS=$(nft list chain inet authnft_1011 input 2>/dev/null \
     | grep 'cg-match' | grep -oP 'packets \K[0-9]+')
 if [[ -n "$CG_PKTS" && "$CG_PKTS" -gt "$PREV_PKTS" ]]; then
@@ -441,7 +441,7 @@ nft add element inet authnft_1012 probe_set \
 
 # Start a listener OUTSIDE the scope, THEN move the owning process in.
 # The socket was created before the cgroup migration → Class B.
-nc -l 127.0.0.1 18082 </dev/null &
+ncat -l 127.0.0.1 18082 </dev/null &
 S1012_LISTEN=$!
 S1011_PIDS+=($S1012_LISTEN)
 sleep 0.3
@@ -455,7 +455,7 @@ echo $S1012_LISTEN > /sys/fs/cgroup${s1011_scope_path}/cgroup.procs 2>/dev/null 
 
 # Connect. If sk_cgrp_data were migrate-time, the counter would fire.
 # Since it's alloc-time, the socket still carries the harness cgroup.
-timeout 5 nc -w3 127.0.0.1 18082 --source 127.0.0.4 </dev/null >/dev/null 2>&1 || true
+timeout 5 ncat -w3 127.0.0.1 18082 --source 127.0.0.4 </dev/null >/dev/null 2>&1 || true
 
 CG_PKTS=$(nft list chain inet authnft_1012 input 2>/dev/null \
     | grep 'classb-match' | grep -oP 'packets \K[0-9]+')
@@ -528,7 +528,7 @@ nft add element inet authnft_1013 bob_set \
 # Listener in bob's scope on port 18083.
 sh -c '
     echo $$ > /sys/fs/cgroup'"${s1013_bob}"'/cgroup.procs
-    echo OK | exec nc -l 127.0.0.1 18083
+    echo OK | exec ncat -l 127.0.0.1 18083
 ' &
 S1011_PIDS+=($!)
 sleep 0.5
@@ -537,7 +537,7 @@ sleep 0.5
 # model, alice's deny counter would fire. With per-session sets,
 # alice's deny counter should NOT fire (bob's element is in bob_set,
 # not alice_set). bob's own counter SHOULD fire.
-timeout 5 nc -w3 127.0.0.1 18083 --source 127.0.0.6 </dev/null >/dev/null 2>&1 || true
+timeout 5 ncat -w3 127.0.0.1 18083 --source 127.0.0.6 </dev/null >/dev/null 2>&1 || true
 
 ALICE_PKTS=$(nft list chain inet authnft_1013 input 2>/dev/null \
     | grep 'alice-deny' | grep -oP 'packets \K[0-9]+')
@@ -634,6 +634,12 @@ printf "${YELLOW}10.15: Privsep close_session boundary (real sshd loopback)${RES
 if ! command -v sshd >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1 || \
    ! command -v ssh >/dev/null 2>&1; then
     pass "10.15: [SKIP] sshd / ssh-keygen / ssh not available on this host"
+elif ! grep -rqsE 'pam_authnft' /etc/pam.d/sshd; then
+    # sshd uses PAM service "sshd"; without pam_authnft wired into
+    # /etc/pam.d/sshd this stage drives a session that never loads the
+    # module and would pass vacuously. Skip rather than mislead. A test
+    # does not rewrite the system sshd PAM config.
+    pass "10.15: [SKIP] sshd present but /etc/pam.d/sshd does not load pam_authnft"
 else
     # Stage 10.15 needs the test user to be able to exec something across
     # the SSH session. The default test user has nologin/false as shell;
@@ -693,7 +699,8 @@ NFT
     chown root:root "$FRAGMENT"
     chmod 644 "$FRAGMENT"
 
-    /usr/sbin/sshd -f "$SSH_DIR/sshd_config" -E "$SSH_DIR/sshd.log"
+    SSHD_BIN=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
+    "$SSHD_BIN" -f "$SSH_DIR/sshd_config" -E "$SSH_DIR/sshd.log"
     sleep 0.4
 
     if [[ ! -s "$SSHD_PID_FILE" ]]; then
@@ -701,15 +708,31 @@ NFT
         tail -20 "$SSH_DIR/sshd.log" >&2
         pass "10.15: [SKIP] sshd refused to start (port in use? selinux?)"
     else
-        # Drive a connection that opens a session, runs `true`, exits.
-        # That is enough for sshd to call pam_open_session and
-        # pam_close_session, which exercises the privsep boundary.
-        ssh -o StrictHostKeyChecking=no \
+        # Drive a real command (not `true`) and read the session's cgroup.
+        # The old `true` could not tell a working session from a broken
+        # one; this asserts the negative controls it lacked. The marker
+        # returning proves the seccomp sandbox does NOT kill the
+        # post-open_session exec (the user command runs in a child that does
+        # not inherit the monitor's filter). The cgroup proves pam_authnft
+        # actually ran: only it creates authnft.slice/<scope>. The privsep
+        # close teardown is asserted below.
+        SSH_OUT=$(ssh -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes \
             -o ConnectTimeout=5 \
             -i "$CLIENT_KEY" -p "$SSHD_PORT" \
-            "$TEST_USER@127.0.0.1" true 2>"$SSH_DIR/ssh.err" || true
+            "$TEST_USER@127.0.0.1" 'echo AUTHNFT_EXEC_OK; cat /proc/self/cgroup' \
+            2>"$SSH_DIR/ssh.err" || true)
+        if ! printf '%s' "$SSH_OUT" | grep -q AUTHNFT_EXEC_OK; then
+            echo "ssh output: [$SSH_OUT]" >&2
+            echo "ssh stderr:" >&2; cat "$SSH_DIR/ssh.err" >&2
+            tail -40 "$SSH_DIR/sshd.log" >&2
+            fail "10.15: session command did not execute under the sandbox (exec killed by seccomp?)"
+        fi
+        if ! printf '%s' "$SSH_OUT" | grep -q 'authnft\.slice/authnft-'; then
+            echo "session cgroup: [$SSH_OUT]" >&2
+            fail "10.15: sshd session not pinned to an authnft scope (pam_authnft did not run)"
+        fi
 
         # Give sshd a moment to run its postauth teardown (mm_answer_term
         # → sshpam_cleanup → pam_close_session).
@@ -726,9 +749,12 @@ NFT
         fi
 
         # And no transient scope under authnft.slice.
+        # grep -v '^$' exits 1 on empty input (the no-leak success case);
+        # under pipefail that would trip set -e and kill the script before
+        # the pass below. The || true keeps the success case from aborting.
         LEAKED_SCOPE=$(systemctl --no-legend list-units --all --type=scope \
             "authnft-$TEST_USER-*.scope" 2>/dev/null \
-            | awk '{print $1}' | grep -v '^$' | head -1)
+            | awk '{print $1}' | grep -v '^$' | head -1 || true)
         if [[ -n "$LEAKED_SCOPE" ]]; then
             echo "leaked scope: $LEAKED_SCOPE" >&2
             systemctl stop "$LEAKED_SCOPE" 2>/dev/null || true
@@ -761,13 +787,17 @@ if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session > /dev/
 fi
 
 # Confirm all eight rules were committed to the per-session chain.
+# awk exits on the first match, closing the pipe early; nft then takes a
+# SIGPIPE that pipefail+set -e would turn into a silent abort, so guard the
+# substitution with || true and let the [[ -z ]] check below do the
+# validation. Same reason grep -c (0 matches -> exit 1) needs the guard.
 SESSION_CHAIN=$(nft list table inet authnft 2>/dev/null | \
-    awk '/chain session_/ {gsub(/[{}]/,"",$2); print $2; exit}')
+    awk '/chain session_/ {gsub(/[{}]/,"",$2); print $2; exit}' || true)
 if [[ -z "$SESSION_CHAIN" ]]; then
     fail "10.16: per-session chain not found after open_session"
 fi
 RULE_COUNT=$(nft list chain inet authnft "$SESSION_CHAIN" 2>/dev/null | \
-    grep -c 'socket cgroupv2')
+    grep -c 'socket cgroupv2' || true)
 if [[ "$RULE_COUNT" -ne 8 ]]; then
     fail "10.16: expected 8 substituted rules in $SESSION_CHAIN, found $RULE_COUNT"
 fi
