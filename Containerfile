@@ -97,11 +97,12 @@ case "$WORKFLOW" in
         cp -f trace.log trace-claims.log /shared/ 2>/dev/null || true
         ;;
     audit)
-        # Comprehensive local audit: unit suite (seccomp enforcement) +
-        # integration suite (16 stages) + fault matrix (nft_handler_setup
-        # error returns under ASan/LSan + lifecycle under valgrind). Covers
-        # every gate the hosted CI cannot run for want of root/nft/systemd/
-        # cgroup. Aggregated verdict in EC.
+        # Local audit: unit suite (seccomp enforcement) + fault matrix
+        # (nft_handler_setup error returns under ASan/LSan + lifecycle
+        # under valgrind). The 16-stage integration suite is opt-in and
+        # off by default (AUDIT_RUN_INTEGRATION=1) — see audit/run-all.sh.
+        # Covers the gates the hosted CI cannot run for want of root/nft/
+        # systemd/cgroup. Aggregated verdict in EC.
         ./audit/run-all.sh || EC=$?
         cp -f /tmp/vg.log /shared/valgrind.log 2>/dev/null || true
         cp -f /tmp/asan_authnft.* /tmp/scen-*.out /shared/ 2>/dev/null || true

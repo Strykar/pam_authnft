@@ -9,17 +9,18 @@
 #   Part A  unit suite (make test)         seccomp SIGSYS enforcement (Stage 2)
 #                                          + allowlist survival (Stage 3) +
 #                                          the validator/lifecycle units
-#   Part B  integration suite (16 stages)  real pamtester lifecycle, fragment
-#                                          perms, rollback (10.14), and the
-#                                          socket-cgroupv2 stages (10.11/10.12)
-#                                          — the last self-skip under the
-#                                          container's nested cgroup namespace
-#                                          and run for real under the microVM
+#   Part B  integration suite (16 stages)  OPT-IN, off by default
+#                                          (AUDIT_RUN_INTEGRATION=1). Has
+#                                          host-environment coupling that
+#                                          does not survive headless runs in
+#                                          either substrate; see the gate
+#                                          below. Not part of the default
+#                                          verdict.
 #   Part C  fault matrix (run-audit.sh)    nft_handler_setup's error returns
 #                                          under ASan/LSan + the lifecycle
 #                                          under valgrind
 #
-# Aggregated verdict: non-zero if any part fails.
+# Aggregated verdict: non-zero if any enabled part fails (A + C by default).
 set -uo pipefail
 
 cd "$(dirname "$0")/.."

@@ -223,10 +223,11 @@ trace-container:
 #
 # Drives nft_handler_setup's error returns under a leak detector, which
 # the happy-path integration suite never does. The fault driver links
-# the production objects under -fsanitize=address,undefined; the
-# malloc-fail preload is for the allocation-failure sweep. Both are
-# built and run inside the rootful audit container by audit/run-audit.sh.
-# This is the harness that would have caught CID 1659576.
+# the production objects under -fsanitize=address,undefined; the nft_fail
+# preload drives the call-2 and handle-parse returns, and the malloc-fail
+# preload is a manual allocation-failure tool. All are built and run
+# inside the rootful audit container by audit/run-audit.sh. This is the
+# harness that would have caught CID 1659576.
 # ---------------------------------------------------------------------
 AUDIT_DRIVER  = audit/nft_fault_driver
 AUDIT_PRELOAD = audit/malloc_fail.so
@@ -259,11 +260,11 @@ audit-vm:
 	./ci/vng-audit.sh
 
 # `make audit` is the local gate: tier 1 (container) by default — the same
-# thing the pre-push hook runs. `make audit-all` adds the tier-2 microVM.
+# thing the pre-commit hook runs. `make audit-all` adds the tier-2 microVM.
 audit: audit-container
 audit-all: audit-container audit-vm
 
-# Route git hooks at .githooks/ so `git push` runs the tier-1 audit.
+# Route git hooks at .githooks/ so code-touching commits run the tier-1 audit.
 install-hooks:
 	git config core.hooksPath .githooks
 	@echo "git hooks installed:"
