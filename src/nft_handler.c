@@ -308,6 +308,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     }
 
     if (result < 0 || (size_t)result >= sizeof(cmd)) {
+        free(frag_buf);
         nft_ctx_free(ctx);
         return PAM_BUF_ERR;
     }
@@ -335,6 +336,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         } else {
             pam_syslog(pamh, LOG_ERR, "authnft: setup call 1 failed: %s", err_msg);
         }
+        free(frag_buf);
         nft_ctx_free(ctx);
         return PAM_SERVICE_ERR;
     }
@@ -360,6 +362,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         /* Roll back call 1 state. jump_handle is still 0 so the
          * partial cleanup skips the rule-delete branch correctly. */
         nft_partial_cleanup(ctx, sd);
+        free(frag_buf);
         nft_ctx_free(ctx);
         return PAM_SERVICE_ERR;
     }
@@ -387,6 +390,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
          * succeeded) but we never captured its handle, so it leaks
          * here — see comment on nft_partial_cleanup. */
         nft_partial_cleanup(ctx, sd);
+        free(frag_buf);
         nft_ctx_free(ctx);
         return PAM_SERVICE_ERR;
     }
