@@ -14,3 +14,7 @@ trace-features.log
 # Maintainer-local helpers
 docs/DOC_CHECKLIST.txt
 docs/audit_scope.txt
+
+# Local audit harness build artifacts
+audit/nft_fault_driver
+audit/malloc_fail.so

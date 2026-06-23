@@ -218,6 +218,54 @@ trace-container:
 	@mkdir -p $(RESULT_DIR) && echo trace > $(RESULT_DIR)/workflow
 	$(RUN_CONTAINER)
 
+# ---------------------------------------------------------------------
+# Local root-capable audit harness — tier 1 (fault matrix).
+#
+# Drives nft_handler_setup's error returns under a leak detector, which
+# the happy-path integration suite never does. The fault driver links
+# the production objects under -fsanitize=address,undefined; the
+# malloc-fail preload is for the allocation-failure sweep. Both are
+# built and run inside the rootful audit container by audit/run-audit.sh.
+# This is the harness that would have caught CID 1659576.
+# ---------------------------------------------------------------------
+AUDIT_DRIVER  = audit/nft_fault_driver
+AUDIT_PRELOAD = audit/malloc_fail.so
+AUDIT_CFLAGS  = -fPIC -Wall -Wextra -g -O1 -Iinclude -D_GNU_SOURCE \
+                -fsanitize=address,undefined -fno-omit-frame-pointer
+
+$(AUDIT_DRIVER): audit/nft_fault_driver.c $(wildcard src/*.c) include/authnft.h
+	$(CC) $(AUDIT_CFLAGS) audit/nft_fault_driver.c $(wildcard src/*.c) \
+	    -o $@ `$(PKG_CONFIG) --libs $(LIBS)`
+
+$(AUDIT_PRELOAD): audit/malloc_fail.c
+	$(CC) -fPIC -shared -O1 -o $@ $< -ldl
+
+audit-build: $(AUDIT_DRIVER) $(AUDIT_PRELOAD)
+
+# Tier 1 audit inside the booted-systemd container (no host mutation).
+audit-container: RESULT_DIR = $(CURDIR)/.container-result
+audit-container:
+	$(CONTAINER_BUILD)
+	@mkdir -p $(RESULT_DIR) && echo audit > $(RESULT_DIR)/workflow
+	$(RUN_CONTAINER)
+
+# Tier 2 audit in a real-kernel virtme-ng microVM (optional kernel matrix
+# via KERNELS="host v6.12 ..."). Ephemeral guest; no host mutation.
+audit-vm:
+	./ci/vng-audit.sh
+
+# `make audit` is the local gate: tier 1 (container) by default — the same
+# thing the pre-push hook runs. `make audit-all` adds the tier-2 microVM.
+audit: audit-container
+audit-all: audit-container audit-vm
+
+# Route git hooks at .githooks/ so `git push` runs the tier-1 audit.
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks installed:"
+	@echo "  pre-commit  runs 'make audit' (tier-1) on every code-touching commit"
+	@echo "  pre-push    opt-in: AUTHNFT_AUDIT_ON_PUSH=1 / AUTHNFT_AUDIT_VM=1"
+
 # Software Bill of Materials. On-demand generation via syft, which
 # parses the .so's DT_NEEDED entries plus build metadata. Output is
 # CycloneDX 1.5 JSON suitable for upload alongside a GitHub release

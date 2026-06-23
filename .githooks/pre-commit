@@ -1,0 +1,45 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# pre-commit gate: run the tier-1 root-capable audit (fault matrix under a
+# leak detector, in the booted-systemd container) on every commit that
+# touches code. This is the loop that closes the gap CID 1659576 (the
+# frag_buf leak) slipped through — a leak on an nft_handler_setup error
+# return can no longer be committed.
+#
+# Doc-only / metadata-only commits skip the audit (no code to re-audit),
+# so writing docs stays instant. Code commits pay the audit's ~1-2 min.
+#
+# Enable with: make install-hooks   (sets core.hooksPath to .githooks)
+#
+# Escape hatch (use sparingly): AUTHNFT_SKIP_AUDIT=1 git commit ...
+set -uo pipefail
+
+if [ "${AUTHNFT_SKIP_AUDIT:-0}" = 1 ]; then
+    echo "pre-commit: AUTHNFT_SKIP_AUDIT=1 — skipping tier-1 audit" >&2
+    exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 1
+
+# Files whose change can alter what the audit exercises. Doc/CI-metadata
+# changes outside this set don't trigger the (slow) container audit.
+CODE_RE='^(src/|include/|audit/|ci/|tests/|Makefile$|Containerfile$|mull\.yml$|pam_authnft\.map$)'
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+if ! printf '%s\n' "$staged" | grep -qE "$CODE_RE"; then
+    echo "pre-commit: no code changes staged — skipping tier-1 audit" >&2
+    exit 0
+fi
+
+echo "pre-commit: code changed — running tier-1 audit (make audit) ..." >&2
+if ! make audit; then
+    echo "pre-commit: tier-1 audit FAILED — commit blocked." >&2
+    echo "  inspect: cat .container-result/log" >&2
+    echo "  override once (not recommended): AUTHNFT_SKIP_AUDIT=1 git commit ..." >&2
+    exit 1
+fi
+
+echo "pre-commit: audit passed." >&2
+exit 0

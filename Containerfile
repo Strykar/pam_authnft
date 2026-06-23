@@ -32,6 +32,8 @@ FROM registry.fedoraproject.org/fedora:latest
 
 RUN dnf -y install \
         gcc \
+        libasan \
+        libubsan \
         make \
         pkgconf-pkg-config \
         nftables \
@@ -93,6 +95,16 @@ case "$WORKFLOW" in
     trace)
         make clean && make && ./tests/trace.sh "$(pwd)/pam_authnft.so" || EC=$?
         cp -f trace.log trace-claims.log /shared/ 2>/dev/null || true
+        ;;
+    audit)
+        # Tier-1 fault-matrix audit: drive nft_handler_setup's error
+        # returns under ASan/LSan and the real pamtester lifecycle under
+        # valgrind. The detectors own the leak verdict via their exit
+        # codes; run-audit.sh aggregates and returns non-zero on any
+        # leak or UB. This is the harness that would have caught the
+        # frag_buf leak (CID 1659576).
+        make clean >/dev/null && ./audit/run-audit.sh || EC=$?
+        cp -f /tmp/vg.log /shared/valgrind.log 2>/dev/null || true
         ;;
     trace-features)
         make clean && make && make trace-features || EC=$?
