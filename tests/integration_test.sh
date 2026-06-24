@@ -49,7 +49,7 @@ fi
 GROUP_FRAG_10_8=""
 S1011_PIDS=()
 cleanup() {
-    rm -f "$RULES_DIR/$TEST_USER" "$PAM_TEST_CONF"
+    rm -f "$RULES_DIR/$TEST_USER" "$PAM_TEST_CONF" /etc/pam.d/authnft_strict
     [[ -n "$GROUP_FRAG_10_8" ]] && rm -f "$GROUP_FRAG_10_8"
     if (( ${#S1011_PIDS[@]} > 0 )); then
         kill "${S1011_PIDS[@]}" 2>/dev/null || true
@@ -805,5 +805,54 @@ fi
 pamtester authnft_test "$TEST_USER" close_session > /dev/null 2>&1 || true
 nft delete table inet authnft 2>/dev/null || true
 pass "10.16: placeholder-dense fragment substituted and loaded ($RULE_COUNT rules)"
+
+# 10.17: rhost_policy=strict denies a non-IP PAM_RHOST. The negative control
+# is the same input under the default (lax) policy, which binds cgroup-only
+# and succeeds — proving the denial is strict-specific, not just the
+# hostname being rejected. The strict path returns PAM_SESSION_ERR before
+# any nft/scope state is created (pam_entry.c).
+nft delete table inet authnft 2>/dev/null || true
+printf "${YELLOW}10.17: rhost_policy=strict denies a non-IP PAM_RHOST${RESET}\n"
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsession  required  %s rhost_policy=strict\npassword required  pam_deny.so\n' "$SO_PATH" > /etc/pam.d/authnft_strict
+if pamtester -I rhost=client.example.invalid authnft_strict "$TEST_USER" open_session > /dev/null 2>&1; then
+    pamtester authnft_strict "$TEST_USER" close_session > /dev/null 2>&1 || true
+    rm -f /etc/pam.d/authnft_strict; nft delete table inet authnft 2>/dev/null || true
+    fail "10.17: rhost_policy=strict did NOT deny a non-IP PAM_RHOST"
+fi
+if ! pamtester -I rhost=client.example.invalid authnft_test "$TEST_USER" \
+        open_session close_session > /dev/null 2>&1; then
+    rm -f /etc/pam.d/authnft_strict; nft delete table inet authnft 2>/dev/null || true
+    fail "10.17: lax policy should bind cgroup-only on a non-IP rhost but failed (denial is not strict-specific)"
+fi
+rm -f /etc/pam.d/authnft_strict
+nft delete table inet authnft 2>/dev/null || true
+pass "10.17: rhost_policy=strict denies non-IP PAM_RHOST; lax binds cgroup-only"
+
+# 10.18: the jump rule's kernel handle is parsed at open and the rule is
+# deleted by that handle at close. open+close in ONE pamtester handle (so
+# the stored handle survives to close) must leave NO jump rule in the shared
+# filter chain. The documented residual leak — call 2 commits the jump but
+# the echo/handle parse fails, leaving jump_handle 0 — would leave it behind.
+nft delete table inet authnft 2>/dev/null || true
+printf "${YELLOW}10.18: jump-rule handle captured and cleaned up${RESET}\n"
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" \
+        open_session close_session > /dev/null 2>&1; then
+    fail "10.18: open+close lifecycle failed"
+fi
+JUMPS=$(nft list chain inet authnft filter 2>/dev/null | grep -c 'jump session_' || true)
+if [[ "$JUMPS" -ne 0 ]]; then
+    nft list chain inet authnft filter >&2 2>/dev/null || true
+    fail "10.18: jump rule leaked after close ($JUMPS present) — handle not captured/deleted"
+fi
+nft delete table inet authnft 2>/dev/null || true
+pass "10.18: jump rule captured at open and deleted at close (no leak)"
 
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

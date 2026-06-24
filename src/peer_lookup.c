@@ -53,9 +53,10 @@ int parse_socket_inode(const char *target, unsigned long *out_inode) {
 /* Collect socket inodes held by `pid` by readlink-ing each entry under
  * /proc/<pid>/fd. Returns the count or -1 on failure. On exit,
  * *truncated is set to 1 if at least one socket inode was observed
- * beyond `cap` and dropped. */
-static int collect_socket_inodes(pid_t pid, ino_t *inodes, size_t cap,
-                                  int *truncated) {
+ * beyond `cap` and dropped. Non-static so the unit test (test_suite.c
+ * STAGE 11) can pin the cap behavior; not exported from the .so. */
+int collect_socket_inodes(pid_t pid, ino_t *inodes, size_t cap,
+                          int *truncated) {
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/fd", (int)pid);
 

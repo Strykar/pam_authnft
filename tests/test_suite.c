@@ -5,6 +5,7 @@
 #include "util_validators.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <grp.h>
 #include <nftables/libnftables.h>
 #include <signal.h>
 #include <stdio.h>
@@ -306,6 +307,92 @@ static void run_keyring_test(void) {
     printf("[PASS] tag='%s'\n", tag);
 }
 
+/* Stage 11: collect_socket_inodes caps the /proc/<pid>/fd socket scan at
+ * INODES_CAP and flags truncation. A process holding more socket inodes
+ * than the cap must yield exactly the cap and truncated=1; otherwise a peer
+ * lookup can silently miss the target socket under rhost_policy=kernel. */
+int collect_socket_inodes(pid_t pid, ino_t *inodes, size_t cap, int *truncated);
+static void run_inodes_cap_test(void) {
+    printf("[STAGE 11] collect_socket_inodes cap + truncation...\n");
+    int extra = INODES_CAP + 8;
+    int *fds = calloc((size_t)extra, sizeof(int));
+    if (!fds) { printf("[SKIP] calloc\n"); return; }
+    int opened = 0;
+    for (int i = 0; i < extra; i++) {
+        fds[i] = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+        if (fds[i] >= 0) opened++;
+    }
+    int n = -1, truncated = 0;
+    if (opened > INODES_CAP) {
+        ino_t buf[INODES_CAP];
+        n = collect_socket_inodes(getpid(), buf, INODES_CAP, &truncated);
+    }
+    for (int i = 0; i < extra; i++)
+        if (fds[i] >= 0) close(fds[i]);
+    free(fds);
+    if (opened <= INODES_CAP) {
+        printf("[SKIP] could not open > %d sockets (opened %d)\n", INODES_CAP, opened);
+        return;
+    }
+    if (n != INODES_CAP || !truncated) {
+        fprintf(stderr, "[FAIL] cap not honored: n=%d (want %d) truncated=%d\n",
+                n, INODES_CAP, truncated);
+        exit(1);
+    }
+    printf("[PASS] cap honored (%d inodes, truncated=1)\n", n);
+}
+
+/* Stage 12: session_file_write writes a 0640 root-owned JSON file, group
+ * authnft when that group exists and root otherwise. The group-absent
+ * degradation (group readers then get EACCES) is a packaging-regression
+ * case no other test pins. Needs root to verify ownership. */
+static void run_session_file_perms_test(void) {
+    printf("[STAGE 12] session_file_write permission contract...\n");
+    if (geteuid() != 0) { printf("[SKIP] needs root to verify ownership.\n"); return; }
+    if ((mkdir("/run/authnft", 0755) < 0 && errno != EEXIST) ||
+        (mkdir("/run/authnft/sessions", 0700) < 0 && errno != EEXIST)) {
+        printf("[SKIP] mkdir /run/authnft/sessions: %s\n", strerror(errno));
+        return;
+    }
+    authnft_session_t sd;
+    memset(&sd, 0, sizeof(sd));
+    snprintf(sd.scope_unit, sizeof(sd.scope_unit), "authnft-unittest-%d.scope", (int)getpid());
+    snprintf(sd.cg_path, sizeof(sd.cg_path), "authnft.slice/%s", sd.scope_unit);
+    snprintf(sd.remote_ip, sizeof(sd.remote_ip), "127.0.0.1");
+    char path[256];
+    snprintf(path, sizeof(path), "/run/authnft/sessions/%s.json", sd.scope_unit);
+    unlink(path);
+    if (session_file_write(NULL, &sd, "unittest", (int)getpid()) != 0) {
+        fprintf(stderr, "[FAIL] session_file_write returned -1\n");
+        exit(1);
+    }
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "[FAIL] session file %s not created\n", path);
+        exit(1);
+    }
+    int ok = 1;
+    if ((st.st_mode & 0777) != 0640) {
+        fprintf(stderr, "[FAIL] mode %o != 0640\n", st.st_mode & 0777);
+        ok = 0;
+    }
+    if (st.st_uid != 0) {
+        fprintf(stderr, "[FAIL] owner uid %u != root\n", (unsigned)st.st_uid);
+        ok = 0;
+    }
+    struct group *g = getgrnam("authnft");
+    gid_t want = g ? g->gr_gid : 0;
+    if (st.st_gid != want) {
+        fprintf(stderr, "[FAIL] gid %u != expected %u (authnft %s)\n",
+                (unsigned)st.st_gid, (unsigned)want, g ? "present" : "absent");
+        ok = 0;
+    }
+    unlink(path);
+    if (!ok) exit(1);
+    printf("[PASS] 0640 root:%s (authnft group %s)\n",
+           g ? "authnft" : "root", g ? "present" : "absent");
+}
+
 int main(void) {
     printf("--- pam_authnft unit tests ---\n\n");
     run_input_validation_test();
@@ -318,6 +405,8 @@ int main(void) {
     run_rhost_normalization_test();
     run_peer_lookup_test();
     run_keyring_test();
+    run_inodes_cap_test();
+    run_session_file_perms_test();
     printf("\n[DONE]\n");
     return 0;
 }
