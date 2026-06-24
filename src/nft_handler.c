@@ -526,3 +526,69 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
     nft_ctx_free(ctx);
     return PAM_SUCCESS;
 }
+
+/*
+ * Best-effort teardown for the case where the sandboxed setup child died (a
+ * SIGSYS from an allowlist gap) before it could roll back its own partial
+ * state. The parent calls this with the per-session names it built before
+ * the fork, but without the jump-rule handle the child never reported.
+ * Recover the handle by listing the shared filter chain and matching the
+ * jump to our per-session chain, delete that rule, then drop the chain and
+ * the three sets. Every step tolerates an absent object, so a child that
+ * died before committing anything is a clean no-op.
+ */
+int nft_handler_cleanup_orphan(pam_handle_t *pamh, const char *user,
+                               const authnft_session_t *sd) {
+    (void)pamh;  /* no logging here; the caller reports the failure context */
+    if (strcmp(user, "root") == 0) return PAM_SUCCESS;
+    if (!sd || sd->chain_name[0] == '\0') return PAM_SESSION_ERR;
+
+    struct nft_ctx *ctx = nft_ctx_new(NFT_CTX_DEFAULT);
+    if (!ctx) return PAM_SESSION_ERR;
+
+    /* Recover the jump-rule handle: list the shared chain with handles and
+     * find "jump <chain_name> ". The trailing space keeps a shorter pid from
+     * matching a longer one (session_u_12 vs session_u_123). The jump rule
+     * carries no comment, so the first "# handle" after the match is ours. */
+    uint64_t handle = 0;
+    nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_HANDLE);
+    nft_ctx_buffer_output(ctx);
+    if (nft_run_cmd_from_buffer(ctx,
+            "list chain inet " TABLE_NAME " filter") == 0) {
+        const char *out = nft_ctx_get_output_buffer(ctx);
+        char needle[CHAIN_NAME_MAX + 8];
+        snprintf(needle, sizeof(needle), "jump %s ", sd->chain_name);
+        const char *j = out ? strstr(out, needle) : NULL;
+        const char *h = j ? strstr(j, "# handle ") : NULL;
+        if (h) (void)sscanf(h, "# handle %" SCNu64, &handle);
+    }
+    nft_ctx_unbuffer_output(ctx);
+    nft_ctx_output_set_flags(ctx, 0);
+
+    char cmd[CMD_BUF_SIZE];
+    /* Drop the jump rule first; a chain cannot be deleted while a rule still
+     * jumps to it. Separate transaction so a missing handle does not abort
+     * the chain/set teardown below. */
+    if (handle) {
+        snprintf(cmd, sizeof(cmd),
+                 "delete rule inet %s filter handle %" PRIu64,
+                 TABLE_NAME, handle);
+        (void)nft_run_cmd_from_buffer(ctx, cmd);
+    }
+
+    snprintf(cmd, sizeof(cmd),
+             "flush chain inet %s %s\n"
+             "delete chain inet %s %s\n"
+             "delete set inet %s %s\n"
+             "delete set inet %s %s\n"
+             "delete set inet %s %s",
+             TABLE_NAME, sd->chain_name,
+             TABLE_NAME, sd->chain_name,
+             TABLE_NAME, sd->set_v4,
+             TABLE_NAME, sd->set_v6,
+             TABLE_NAME, sd->set_cg);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+
+    nft_ctx_free(ctx);
+    return PAM_SUCCESS;
+}

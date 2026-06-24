@@ -104,6 +104,17 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
                         const authnft_session_t *sd);
 
 /*
+ * nft_handler_cleanup_orphan:
+ * Best-effort teardown when the sandboxed setup child died before rolling
+ * back its own partial nft state. Recovers the jump-rule handle by listing
+ * the shared chain (the killed child never reported it), then deletes the
+ * jump rule, the per-session chain, and the three sets. Tolerates absent
+ * objects, so it is a no-op if the child committed nothing.
+ */
+int nft_handler_cleanup_orphan(pam_handle_t *pamh, const char *user,
+                               const authnft_session_t *sd);
+
+/*
  * bus_handler_start:
  * Connects to systemd via D-Bus and creates a transient .scope unit under
  * authnft.slice, placing the session process into a named cgroup.

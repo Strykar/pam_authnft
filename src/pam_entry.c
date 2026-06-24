@@ -131,6 +131,10 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
             pam_syslog(pamh, LOG_ERR,
                        "authnft: sandboxed setup child reported only %zu of "
                        "%zu bytes — failing the session", off, sizeof(res));
+        /* The child died before it could roll back its own partial nft
+         * state, and never reported the jump handle. Reap whatever it had
+         * already committed by name. */
+        (void)nft_handler_cleanup_orphan(pamh, user, sd);
         return PAM_SESSION_ERR;
     }
 
@@ -302,15 +306,13 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
         (void)session_file_write(pamh, sd, user, session_pid);
         event_open_emit(pamh, sd, user, session_pid);
     } else {
-        /* On a clean setup failure the child ran nft_partial_cleanup before
-         * reporting, so only the systemd scope is left to undo here. If the
-         * child was instead SIGSYS-killed mid-setup (an allowlist gap on a
-         * syscall the setup path needs), its rollback never ran and any nft
-         * state already committed by calls 1/2 leaks — the same residual-leak
-         * class as the handle-parse path documented in nft_handler.c. The
-         * per-session element's 1d timeout reaps it; the chain and sets need
-         * manual cleanup. `sd` stays registered with PAM and is freed by
-         * free_pam_data when the handle ends. */
+        /* The per-session nft state is already gone by the time we reach
+         * here: on a clean setup failure the child ran nft_partial_cleanup
+         * before reporting, and on an abnormal child death (SIGSYS from an
+         * allowlist gap) run_sandboxed_nft_setup reaped it by name with
+         * nft_handler_cleanup_orphan. Only the systemd scope is left to undo.
+         * `sd` stays registered with PAM and is freed by free_pam_data when
+         * the handle ends. */
         (void)bus_handler_stop(pamh, user, session_pid);
     }
     return rc;
