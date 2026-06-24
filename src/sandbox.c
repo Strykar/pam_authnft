@@ -78,6 +78,11 @@ int sandbox_apply(pam_handle_t *pamh) {
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(bind), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(connect), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(sendmsg), 0);
+    /* The cgroup-only binding (empty remote_ip from a non-IP PAM_RHOST under
+     * the default policy) builds a `socket cgroupv2 level 0` set; libnftables
+     * batches that path's netlink writes through sendmmsg where the IP-keyed
+     * sets use plain sendmsg. Same security profile as sendmsg. */
+    rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(sendmmsg), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(recvmsg), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(sendto), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(recvfrom), 0);
@@ -111,6 +116,9 @@ int sandbox_apply(pam_handle_t *pamh) {
     /* Process */
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(getpid), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(getrandom), 0);
+    /* libnftables reads the kernel release via uname(2) on the cgroup-only
+     * set path (see sendmmsg above); read-only, same class as getpid. */
+    rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(uname), 0);
     /* Credential queries by libc/libsystemd — observed on Fedora's glibc
      * (not Arch's) during `make trace-container`. Same class as getpid. */
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(getuid), 0);
