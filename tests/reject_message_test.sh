@@ -13,7 +13,6 @@
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SO="$REPO/pam_authnft.so"
-SOREG=/usr/lib/security/pam_authnft_rmsg.so
 HARNESS="$REPO/tests/.reject_message_harness"
 SVC=authnft_rmsg
 SVCFILE="/etc/pam.d/$SVC"
@@ -23,7 +22,7 @@ SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO=sudo
 
 cleanup() {
     $SUDO nft delete table inet authnft 2>/dev/null
-    $SUDO rm -f "$SOREG" "$SVCFILE" "$FRAG"
+    $SUDO rm -f "$SVCFILE" "$FRAG"
     $SUDO userdel "$U" 2>/dev/null
     rm -f "$HARNESS"
 }
@@ -33,8 +32,9 @@ trap cleanup EXIT
 cc -O2 -Wall -o "$HARNESS" "$REPO/tests/reject_message_harness.c" -lpam \
     || { echo "FAIL: harness build"; exit 1; }
 
-$SUDO install -m644 "$SO" "$SOREG"
-printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsession  optional  pam_authnft_rmsg.so\n' \
+# Reference the built module by absolute path (PAM module dir differs by distro:
+# /usr/lib/security vs /usr/lib64/security), as integration_test.sh does.
+printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsession  optional  %s\n' "$SO" \
     | $SUDO tee "$SVCFILE" >/dev/null
 $SUDO groupadd authnft 2>/dev/null || true
 $SUDO useradd -M -s /usr/sbin/nologin -G authnft "$U" 2>/dev/null || true

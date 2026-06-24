@@ -7,6 +7,7 @@
 set -euo pipefail
 
 SO_PATH="${1:-$(pwd)/pam_authnft.so}"
+TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_USER="${AUTHNFT_TEST_USER:-authnft-test}"
 RULES_DIR="/etc/authnft/users"
 PAM_TEST_CONF="/etc/pam.d/authnft_test"
@@ -854,5 +855,31 @@ if [[ "$JUMPS" -ne 0 ]]; then
 fi
 nft delete table inet authnft 2>/dev/null || true
 pass "10.18: jump rule captured at open and deleted at close (no leak)"
+
+# 10.19-10.21: the fork-child sandbox fix's behavioral regressions. They need
+# root, nft, systemd, and the sandbox ACTIVE, so they belong in this tier — not
+# the pre-commit fault matrix (which runs AUTHNFT_NO_SANDBOX=1 to coexist with
+# ASan/valgrind) and not the unprivileged GitHub runners. Each is a
+# self-contained script under tests/; run it and surface its verdict.
+printf "${YELLOW}10.19: seccomp sandbox does not leak into the session fork${RESET}\n"
+if bash "$TESTS_DIR/sandbox_session_leak_test.sh" >/tmp/it-10.19.log 2>&1; then
+    pass "10.19: sandbox stays in the setup child; the session fork survives"
+else
+    sed 's/^/    /' /tmp/it-10.19.log; fail "10.19: sandbox session-leak regression failed"
+fi
+
+printf "${YELLOW}10.20: orphaned nft state is reaped when the setup child dies${RESET}\n"
+if AUTHNFT_TEST_FORCE=1 bash "$TESTS_DIR/orphan_cleanup_test.sh" >/tmp/it-10.20.log 2>&1; then
+    pass "10.20: orphan cleanup reaps the chain, sets, and jump rule by name"
+else
+    sed 's/^/    /' /tmp/it-10.20.log; fail "10.20: orphan-cleanup regression failed"
+fi
+
+printf "${YELLOW}10.21: fragment-reject message reaches the user from the parent${RESET}\n"
+if bash "$TESTS_DIR/reject_message_test.sh" >/tmp/it-10.21.log 2>&1; then
+    pass "10.21: parent delivers the fragment-reject message"
+else
+    sed 's/^/    /' /tmp/it-10.21.log; fail "10.21: reject-message regression failed"
+fi
 
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

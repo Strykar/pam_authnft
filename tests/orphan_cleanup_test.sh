@@ -19,8 +19,9 @@ SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO=sudo
 cleanup(){ $SUDO nft delete table inet authnft 2>/dev/null; rm -f "$DRIVER"; }
 trap cleanup EXIT
 
-if $SUDO nft list table inet authnft >/dev/null 2>&1; then
+if [ -z "${AUTHNFT_TEST_FORCE:-}" ] && $SUDO nft list table inet authnft >/dev/null 2>&1; then
     echo "SKIP: a live 'authnft' table is present; not exercising orphan cleanup on it"
+    echo "      (set AUTHNFT_TEST_FORCE=1 to override in an isolated environment)"
     exit 0
 fi
 

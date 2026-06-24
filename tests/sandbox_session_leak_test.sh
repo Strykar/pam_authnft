@@ -16,7 +16,6 @@
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SO="$REPO/pam_authnft.so"
-SOREG=/usr/lib/security/pam_authnft_regress.so
 HARNESS="$REPO/tests/.sandbox_leak_harness"
 SVC=authnft_seccomp_regress
 SVCFILE="/etc/pam.d/$SVC"
@@ -24,7 +23,7 @@ U=anftleak
 SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO=sudo
 
 cleanup() {
-    $SUDO rm -f "$SOREG" "$SVCFILE"
+    $SUDO rm -f "$SVCFILE"
     $SUDO userdel "$U" 2>/dev/null
     rm -f "$HARNESS"
 }
@@ -35,9 +34,10 @@ trap cleanup EXIT
 [ -f "$SO" ] || { echo "FAIL: no $SO"; exit 1; }
 cc -O2 -Wall -o "$HARNESS" "$REPO/tests/sandbox_session_leak_harness.c" -lpam || { echo "FAIL: harness build"; exit 1; }
 
-# 2. install the fresh module under a regression name + a minimal session stack
-$SUDO install -m644 "$SO" "$SOREG"
-printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsession  optional  pam_authnft_regress.so\n' \
+# 2. minimal session stack referencing the built module by absolute path. The
+# PAM module dir differs by distro (/usr/lib/security vs /usr/lib64/security),
+# so point pam.d straight at $SO the way integration_test.sh does.
+printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsession  optional  %s\n' "$SO" \
     | $SUDO tee "$SVCFILE" >/dev/null
 $SUDO useradd -m -s /bin/sh "$U" 2>/dev/null || true
 
