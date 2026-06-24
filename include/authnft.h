@@ -73,6 +73,22 @@ typedef struct {
 } authnft_session_t;
 
 /*
+ * Why a fragment was rejected, for the user-facing message. nft_handler_setup
+ * runs in a forked child (run_sandboxed_nft_setup), where a pam_error would
+ * write to the child's copy of the PAM conversation state and never reach the
+ * user. The child reports the reason instead, and the parent emits the
+ * message; on the bypass path the parent emits it in-process the same way.
+ */
+typedef enum {
+    AUTHNFT_REJECT_NONE = 0,
+    AUTHNFT_REJECT_FRAGMENT_MISSING,
+    AUTHNFT_REJECT_FRAGMENT_PERMS,
+    AUTHNFT_REJECT_FRAGMENT_UNREADABLE,
+    AUTHNFT_REJECT_FRAGMENT_CONTENT,
+    AUTHNFT_REJECT_FRAGMENT_SYNTAX,
+} authnft_reject_reason;
+
+/*
  * nft_handler_setup:
  * Checks 'authnft' group membership, validates the user's root-owned fragment
  * (verb scan, include-path check), creates the per-session chain and three
@@ -89,9 +105,14 @@ typedef struct {
  * getpid() because this runs in a short-lived forked child (see
  * run_sandboxed_nft_setup in src/pam_entry.c), where getpid() would be
  * the child's transient pid, not the session's.
+ *
+ * reason (may be NULL) is set to the fragment-rejection cause so the caller
+ * can emit the user-facing message from the parent; it is left
+ * AUTHNFT_REJECT_NONE on success and on non-fragment errors.
  */
 int nft_handler_setup(pam_handle_t *pamh, const char *user,
-                      int session_pid, authnft_session_t *sd);
+                      int session_pid, authnft_session_t *sd,
+                      authnft_reject_reason *reason);
 
 /*
  * nft_handler_cleanup:

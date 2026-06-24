@@ -36,6 +36,42 @@ static int is_debug_bypass_requested(int argc, const char **argv) {
  * the pure decision surfaces. See docs/MUTATION_ASAN_EXPERIMENT.md. */
 
 /*
+ * Emit the user-facing message for a fragment rejection. nft_handler_setup
+ * reports the reason rather than calling pam_error itself, because it runs in
+ * a forked child whose PAM conversation writes never reach the connecting
+ * user (see run_sandboxed_nft_setup). The parent emits it instead, for both
+ * the forked and the bypass path. NONE and non-fragment errors are silent;
+ * those are still logged via pam_syslog and the audit channel in the child.
+ */
+static void emit_reject_message(pam_handle_t *pamh, const char *user,
+                                authnft_reject_reason reason) {
+    char path[sizeof(RULES_DIR) + MAX_USER_LEN + 2];
+    snprintf(path, sizeof(path), "%s/%s", RULES_DIR, user);
+    switch (reason) {
+    case AUTHNFT_REJECT_FRAGMENT_MISSING:
+        pam_error(pamh, "authnft: no rule fragment at %s — add one and reconnect.",
+                  path);
+        break;
+    case AUTHNFT_REJECT_FRAGMENT_PERMS:
+        pam_error(pamh, "authnft: fragment %s must be root-owned and not "
+                  "world-writable.", path);
+        break;
+    case AUTHNFT_REJECT_FRAGMENT_UNREADABLE:
+        pam_error(pamh, "authnft: fragment %s could not be read.", path);
+        break;
+    case AUTHNFT_REJECT_FRAGMENT_CONTENT:
+        pam_error(pamh, "authnft: fragment %s rejected by content validator.",
+                  path);
+        break;
+    case AUTHNFT_REJECT_FRAGMENT_SYNTAX:
+        pam_error(pamh, "authnft: fragment syntax error — check /var/log/auth.log");
+        break;
+    case AUTHNFT_REJECT_NONE:
+        break;
+    }
+}
+
+/*
  * Run the seccomp-sandboxed nftables setup in a forked child.
  *
  * sshd calls pam_open_session in its privsep monitor, before the monitor
@@ -66,12 +102,17 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
                                    int bypass) {
     if (bypass) {
         pam_syslog(pamh, LOG_DEBUG, "authnft: seccomp bypassed");
-        return nft_handler_setup(pamh, user, session_pid, sd);
+        authnft_reject_reason reason = AUTHNFT_REJECT_NONE;
+        int rc = nft_handler_setup(pamh, user, session_pid, sd, &reason);
+        emit_reject_message(pamh, user, reason);
+        return rc;
     }
 
-    struct setup_result { int rc; uint64_t jump_handle; } res = {
-        PAM_SESSION_ERR, 0
-    };
+    struct setup_result {
+        int rc;
+        uint64_t jump_handle;
+        authnft_reject_reason reason;
+    } res = { PAM_SESSION_ERR, 0, AUTHNFT_REJECT_NONE };
 
     int pfd[2];
     if (pipe(pfd) < 0) {
@@ -94,7 +135,7 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
         if (sandbox_apply(pamh) < 0)
             pam_syslog(pamh, LOG_ERR, "authnft: failed to apply sandbox");
         else
-            res.rc = nft_handler_setup(pamh, user, session_pid, sd);
+            res.rc = nft_handler_setup(pamh, user, session_pid, sd, &res.reason);
         res.jump_handle = sd->jump_handle;
         for (size_t off = 0; off < sizeof(res); ) {
             ssize_t w = write(pfd[1], (const char *)&res + off,
@@ -139,6 +180,7 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
     }
 
     sd->jump_handle = res.jump_handle;
+    emit_reject_message(pamh, user, res.reason);
     return res.rc;
 }
 
