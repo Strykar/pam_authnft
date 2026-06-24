@@ -83,9 +83,15 @@ typedef struct {
  *
  * On success, sd->jump_handle is populated. On failure, any partially
  * created nftables state is best-effort cleaned up.
+ *
+ * session_pid is the pid recorded in the per-session element comment for
+ * operator diagnostics. It is passed explicitly rather than read from
+ * getpid() because this runs in a short-lived forked child (see
+ * run_sandboxed_nft_setup in src/pam_entry.c), where getpid() would be
+ * the child's transient pid, not the session's.
  */
 int nft_handler_setup(pam_handle_t *pamh, const char *user,
-                      authnft_session_t *sd);
+                      int session_pid, authnft_session_t *sd);
 
 /*
  * nft_handler_cleanup:

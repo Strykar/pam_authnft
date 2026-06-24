@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Conversation that discards all module-emitted messages. pam_error()
  * on the failure paths calls this; it must allocate the response array
@@ -122,7 +123,7 @@ int main(int argc, char **argv)
     int rc = -999;
 
     if (strcmp(scen, "happy") == 0) {
-        rc = nft_handler_setup(pamh, user, &sd);
+        rc = nft_handler_setup(pamh, user, getpid(), &sd);
         printf("[happy] setup rc=%d (PAM_SUCCESS=%d)\n", rc, PAM_SUCCESS);
         if (rc == PAM_SUCCESS)
             nft_handler_cleanup(pamh, user, &sd);
@@ -133,7 +134,7 @@ int main(int argc, char **argv)
         fill_max(sd.set_v6, sizeof(sd.set_v6), 'D');
         fill_max(sd.set_cg, sizeof(sd.set_cg), 'E');
         fill_max(sd.claims_tag, sizeof(sd.claims_tag), 'F');
-        rc = nft_handler_setup(pamh, user, &sd);
+        rc = nft_handler_setup(pamh, user, getpid(), &sd);
         printf("[truncate] setup rc=%d  PAM_BUF_ERR=%d  "
                "truncation-path-reachable=%s\n",
                rc, PAM_BUF_ERR, rc == PAM_BUF_ERR ? "YES" : "no");
@@ -146,7 +147,7 @@ int main(int argc, char **argv)
                     "[nftfail] note: conflict pre-create rc=%d "
                     "(call 1 may not fail as intended)\n",
                     crc);
-        rc = nft_handler_setup(pamh, user, &sd);
+        rc = nft_handler_setup(pamh, user, getpid(), &sd);
         printf("[nftfail] setup rc=%d (expect non-SUCCESS)\n", rc);
         if (rc == PAM_SUCCESS)
             nft_handler_cleanup(pamh, user, &sd);

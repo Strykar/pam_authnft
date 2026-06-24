@@ -110,7 +110,7 @@ static void nft_partial_cleanup(struct nft_ctx *ctx,
 }
 
 int nft_handler_setup(pam_handle_t *pamh, const char *user,
-                      authnft_session_t *sd) {
+                      int session_pid, authnft_session_t *sd) {
     struct nft_ctx *ctx;
     char cmd[CMD_BUF_SIZE];
     char user_conf_path[256];
@@ -286,7 +286,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
                   TABLE_NAME, sd->set_v4,
                   TABLE_NAME, sd->set_v6,
                   TABLE_NAME, sd->set_cg,
-                  TABLE_NAME, set_name, sd->cg_path, user, getpid(), tag_part);
+                  TABLE_NAME, set_name, sd->cg_path, user, session_pid, tag_part);
     } else {
         result = snprintf(cmd, sizeof(cmd),
                   "add table inet %s\n"
@@ -304,7 +304,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
                   TABLE_NAME, sd->set_v4,
                   TABLE_NAME, sd->set_v6,
                   TABLE_NAME, sd->set_cg,
-                  TABLE_NAME, set_name, sd->cg_path, remote_ip, user, getpid(), tag_part);
+                  TABLE_NAME, set_name, sd->cg_path, remote_ip, user, session_pid, tag_part);
     }
 
     if (result < 0 || (size_t)result >= sizeof(cmd)) {

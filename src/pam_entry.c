@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
 
@@ -33,6 +34,109 @@ static int is_debug_bypass_requested(int argc, const char **argv) {
  * src/util_validators.c; declarations in util_validators.h. The
  * extraction is the precondition for unit + mutation testing of
  * the pure decision surfaces. See docs/MUTATION_ASAN_EXPERIMENT.md. */
+
+/*
+ * Run the seccomp-sandboxed nftables setup in a forked child.
+ *
+ * sshd calls pam_open_session in its privsep monitor, before the monitor
+ * forks the process that becomes the user's session (in sshd-session.c
+ * do_pam_session runs ahead of privsep_postauth, and the monitor stays in
+ * monitor_child_postauth). A seccomp filter installed in the monitor is
+ * inherited by that later session fork, and neither clone nor execve is in
+ * the allowlist — it was derived from a pamtester open+close cycle, which
+ * forks no command — so the session is killed with SIGSYS. Installing the
+ * filter in a short-lived child of open_session instead keeps the monitor
+ * unfiltered, while still containing nft_handler_setup, the one step that
+ * feeds semi-trusted input (the user's fragment) through libnftables. The
+ * child's nftables changes live in the kernel and outlast it; it returns
+ * the setup result and the parsed jump-rule handle (which close_session
+ * needs for teardown) to the parent over a pipe.
+ *
+ * Fails closed with PAM_SESSION_ERR on a short read or an abnormally-exited
+ * child. A child killed by SIGSYS means the allowlist is missing a syscall
+ * the setup path needs — the same fail-closed posture sandbox_apply itself
+ * takes on a rule-registration error.
+ *
+ * bus_handler_start stays in the unsandboxed parent: its only non-
+ * deterministic input is systemd's reply over the system bus, not user
+ * data, so it is not the surface the sandbox exists to contain.
+ */
+static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
+                                   int session_pid, authnft_session_t *sd,
+                                   int bypass) {
+    if (bypass) {
+        pam_syslog(pamh, LOG_DEBUG, "authnft: seccomp bypassed");
+        return nft_handler_setup(pamh, user, session_pid, sd);
+    }
+
+    struct setup_result { int rc; uint64_t jump_handle; } res = {
+        PAM_SESSION_ERR, 0
+    };
+
+    int pfd[2];
+    if (pipe(pfd) < 0) {
+        pam_syslog(pamh, LOG_ERR, "authnft: pipe failed: %m");
+        return PAM_SESSION_ERR;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        pam_syslog(pamh, LOG_ERR, "authnft: fork failed: %m");
+        close(pfd[0]);
+        close(pfd[1]);
+        return PAM_SESSION_ERR;
+    }
+
+    if (pid == 0) {
+        /* The only process that ever carries the filter. nft_handler_setup's
+         * kernel-side nft state persists after this child _exit()s. */
+        close(pfd[0]);
+        if (sandbox_apply(pamh) < 0)
+            pam_syslog(pamh, LOG_ERR, "authnft: failed to apply sandbox");
+        else
+            res.rc = nft_handler_setup(pamh, user, session_pid, sd);
+        res.jump_handle = sd->jump_handle;
+        for (size_t off = 0; off < sizeof(res); ) {
+            ssize_t w = write(pfd[1], (const char *)&res + off,
+                              sizeof(res) - off);
+            if (w <= 0) break;
+            off += (size_t)w;
+        }
+        close(pfd[1]);
+        _exit(0);
+    }
+
+    /* Unsandboxed parent (the sshd monitor): collect the result and reap. */
+    close(pfd[1]);
+    size_t off = 0;
+    while (off < sizeof(res)) {
+        ssize_t r = read(pfd[0], (char *)&res + off, sizeof(res) - off);
+        if (r <= 0) break;
+        off += (size_t)r;
+    }
+    close(pfd[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;
+
+    if (off != sizeof(res) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        if (WIFSIGNALED(status))
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: sandboxed setup child killed by signal %d "
+                       "(SIGSYS here means the allowlist is missing a syscall "
+                       "the setup path needs) — failing the session",
+                       WTERMSIG(status));
+        else
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: sandboxed setup child reported only %zu of "
+                       "%zu bytes — failing the session", off, sizeof(res));
+        return PAM_SESSION_ERR;
+    }
+
+    sd->jump_handle = res.jump_handle;
+    return res.rc;
+}
 
 PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
                                     int argc, const char **argv) {
@@ -126,15 +230,11 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
         norm_ip[0] = '\0';
     }
 
-    if (is_debug_bypass_requested(argc, argv)) {
-        pam_syslog(pamh, LOG_DEBUG, "authnft: seccomp bypassed");
-    } else {
-        if (sandbox_apply(pamh) < 0) {
-            pam_syslog(pamh, LOG_ERR, "authnft: failed to apply sandbox");
-            return PAM_SESSION_ERR;
-        }
-    }
+    int bypass = is_debug_bypass_requested(argc, argv);
 
+    /* The seccomp filter is applied inside run_sandboxed_nft_setup's child,
+     * not in this process — see that function for why. bus_handler_start
+     * runs here, unsandboxed, in the (sshd monitor) caller. */
     if (bus_handler_start(pamh, user, session_pid) < 0)
         return PAM_SESSION_ERR;
 
@@ -197,15 +297,20 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
         return PAM_SESSION_ERR;
     }
 
-    int rc = nft_handler_setup(pamh, user, sd);
+    int rc = run_sandboxed_nft_setup(pamh, user, session_pid, sd, bypass);
     if (rc == PAM_SUCCESS) {
         (void)session_file_write(pamh, sd, user, session_pid);
         event_open_emit(pamh, sd, user, session_pid);
     } else {
-        /* nft_handler_setup rolled back its own partial nft state.
-         * The systemd scope created by bus_handler_start above is
-         * still live — roll it back too. `sd` stays registered with
-         * PAM and is freed by free_pam_data when the handle ends. */
+        /* On a clean setup failure the child ran nft_partial_cleanup before
+         * reporting, so only the systemd scope is left to undo here. If the
+         * child was instead SIGSYS-killed mid-setup (an allowlist gap on a
+         * syscall the setup path needs), its rollback never ran and any nft
+         * state already committed by calls 1/2 leaks — the same residual-leak
+         * class as the handle-parse path documented in nft_handler.c. The
+         * per-session element's 1d timeout reaps it; the chain and sets need
+         * manual cleanup. `sd` stays registered with PAM and is freed by
+         * free_pam_data when the handle ends. */
         (void)bus_handler_stop(pamh, user, session_pid);
     }
     return rc;
