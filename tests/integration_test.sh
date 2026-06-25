@@ -882,4 +882,38 @@ else
     sed 's/^/    /' /tmp/it-10.21.log; fail "10.21: reject-message regression failed"
 fi
 
+# 10.22-10.24: run_sandboxed_nft_setup's error branches, reached with an
+# LD_PRELOAD fault injector (the way audit/nft_fail.c injects libnftables
+# failures). A real allowlist gap (SIGSYS) or fd/process exhaustion would hit
+# these in the field but can't be triggered deterministically; the preload can.
+FAULT_PRELOAD=/tmp/fault_preload.so
+cc -shared -fPIC -O2 -o "$FAULT_PRELOAD" "$TESTS_DIR/fault_preload.c" -ldl \
+    || fail "10.22: fault preload build failed"
+SAFE_USER=$(printf '%s' "$TEST_USER" | tr '.-' '_')
+
+printf "${YELLOW}10.22: setup child death is denied and the nft state reaped${RESET}\n"
+if LD_PRELOAD="$FAULT_PRELOAD" AUTHNFT_FAULT_DIE_AFTER_JUMP=1 \
+       pamtester authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.22: open_session succeeded despite the setup child being killed"
+fi
+if nft list table inet authnft 2>/dev/null | grep -q "session_${SAFE_USER}_"; then
+    nft list table inet authnft 2>/dev/null | grep "session_${SAFE_USER}_" >&2
+    fail "10.22: per-session nft state leaked after the child died mid-setup"
+fi
+pass "10.22: child death after the jump rule -> session denied, state reaped"
+
+printf "${YELLOW}10.23: pipe() failure fails the session closed${RESET}\n"
+if LD_PRELOAD="$FAULT_PRELOAD" AUTHNFT_FAULT_PIPE=1 \
+       pamtester authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.23: open_session succeeded despite pipe() failure"
+fi
+pass "10.23: pipe() failure -> session denied (fail-closed)"
+
+printf "${YELLOW}10.24: fork() failure fails the session closed${RESET}\n"
+if LD_PRELOAD="$FAULT_PRELOAD" AUTHNFT_FAULT_FORK=1 \
+       pamtester authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.24: open_session succeeded despite fork() failure"
+fi
+pass "10.24: fork() failure -> session denied (fail-closed)"
+
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"
