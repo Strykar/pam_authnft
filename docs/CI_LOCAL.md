@@ -33,11 +33,21 @@ returns the happy-path integration suite never takes.
 | 1 | booted-systemd container (rootful, isolated) | `make audit` | unit suite (seccomp SIGSYS enforcement) + all five nft_handler_setup returns under ASan/LSan + real lifecycle under valgrind; **catches the frag_buf class** |
 | 2 | virtme-ng microVM (real kernel, KVM) | `make audit-vm` | same audit under a real kernel + real cgroup hierarchy; optional kernel matrix |
 | 3 | Coverity weekly + local cov-build | (existing) | path-sensitive inter-procedural static backstop |
+| M | Alpine container (musl libc) | `make test-musl` | unit suite built against musl; catches libc-specific seccomp allowlist gaps (the open/readv/writev class) the glibc tiers cannot |
 
 Both tier 1 and tier 2 are **disposable and isolated** — they install a PAM
 module and rewrite nftables, which must never happen on the dev host. The
 container mutates nothing on the host; the microVM overlays the host rootfs
 so its `groupadd`/`useradd`/`nft` writes are ephemeral.
+
+Tier M is orthogonal to the privilege tiers. The seccomp allowlist in
+`src/sandbox.c` is derived from glibc syscall traces, and musl routes
+several libc operations through different syscalls (`fopen` via `open(2)`
+not `openat`, stdio via `readv`/`writev` not `read`/`write`). A glibc-only
+CI cannot see those, so tier M rebuilds the unit suite against musl and runs
+stage 13, which fails closed (SIGSYS) on a gap. It found the missing
+`open`/`readv`/`writev` entries. `apk` inside the Alpine container is a
+separate package set from the host.
 
 ## The fault matrix (tier 1)
 
@@ -79,6 +89,7 @@ That is the proof the green is real.
 make audit            # tier 1: container fault matrix + valgrind lifecycle
 make audit-vm         # tier 2: same audit under a real kernel (vng)
 make audit-all        # tiers 1 + 2
+make test-musl        # tier M: unit suite built against musl (Alpine)
 make install-hooks    # route git hooks at .githooks/; pre-commit runs tier 1
 ```
 
@@ -117,6 +128,7 @@ audit/malloc_fail.c        LD_PRELOAD fail-Nth-allocation interposer (manual)
 audit/run-all.sh           orchestrator: Part A unit/seccomp + Part C fault matrix
 audit/run-audit.sh         in-substrate orchestrator (container + vng)
 ci/vng-audit.sh            tier-2 microVM runner (host kernel + matrix)
+ci/musl-test.sh            tier-M musl build + unit suite (Alpine container)
 .githooks/pre-commit       runs tier-1 audit on every code commit
 .githooks/pre-push         opt-in tier-1/tier-2 at push
 Containerfile              'audit' workflow case
@@ -128,14 +140,18 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
 - `happy` runs inside a transient scope; its detailed return code lands in
   the scope's own journal, not the workflow log (cosmetic).
 - Seccomp enforcement is covered by Part A's unit suite (Stage 2 = a
-  blocked syscall must SIGSYS; Stage 3 = an allowlisted syscall survives),
-  which the audit runs with the sandbox active.
-- The integration suite (16 stages, incl the socket-cgroupv2 stages
-  10.11/10.12) is OPT-IN and EXPERIMENTAL (AUDIT_RUN_INTEGRATION=1, off by
-  default): it has host-environment coupling (umask, file ownership, the
-  host-tuned seccomp allowlist, a degraded systemd in the microVM) that
-  does not survive headless execution in either audit substrate. Making it
-  audit-ready is follow-on work; for now it stays with the existing
+  blocked syscall must SIGSYS; Stage 3 = an allowlisted syscall survives;
+  Stage 13 = the setup-path libc syscall surface survives), which the audit
+  runs with the sandbox active.
+- The integration suite (24 stages) runs green in its own booted-systemd
+  container via `make test-integration-container`; stages 10.19-10.24 cover
+  the fork-child sandbox fix (the session fork survives the sandbox, orphan
+  nft state is reaped, and fork/pipe/child-death faults fail the session
+  closed). It is NOT wired into the every-commit audit gate: inside the
+  `make audit` Part B path it is OPT-IN (AUDIT_RUN_INTEGRATION=1, off by
+  default) because that substrate has host-environment coupling (umask,
+  file ownership, a degraded systemd in the microVM) the dedicated
+  container avoids. Wiring it into Part B is follow-on work; run it via
   `make test-integration-container` / `sudo make test-integration`.
 - `audit/malloc_fail.so` (fail-Nth-allocation interposer) is a **manual**
   targeted tool, not part of the automated gate: a blind sweep fails

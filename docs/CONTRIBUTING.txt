@@ -160,6 +160,16 @@ root-owned tmpfs directory; they do not expand the capability
 surface the module already has for its primary fragment-loading
 work.
 
+The same libc divergence reaches the fragment read itself. On glibc,
+`fopen`/`fread` in `read_file` dispatch to `openat(2)` and `read(2)`.
+On musl (x86_64) `fopen` uses the legacy `open(2)` and stdio uses the
+vectored `readv(2)`/`writev(2)`. `open`, `readv`, and `writev` are
+therefore allowlisted alongside `openat`/`read`/`write`; without them a
+musl build is SIGSYS-killed on the first fragment read. glibc does not
+issue them on this path, so they are inert there. This class is
+exercised by unit stage 13 and the `make test-musl` tier; a glibc-only
+trace cannot surface it.
+
 The structured journal audit events (AUTHNFT_EVENT=open/close) reach
 sd_journal_send, which uses the existing sd-bus socket path
 (socket / sendmsg / connect / close / recvmsg) — all already in the
@@ -188,14 +198,21 @@ Tests
 -----
 
 - `make test` runs the symbol-whitelist check (stage 0) followed by the
-  ten-stage unit suite in `tests/test_suite.c`. Stages 4 and 7 skip
+  thirteen-stage unit suite in `tests/test_suite.c`. Stages 4 and 7 skip
   gracefully without `CAP_NET_ADMIN`; stage 2 skips under
   `AUTHNFT_AUDIT_MODE=1` because of a seccomp/valgrind conflict.
 - **Container workflows are the recommended path.** Every test
   surface runs inside a booted-systemd Fedora container:
-    make test-container              # unit suite, 10 stages, CAP_NET_ADMIN
+    make test-container              # unit suite, 13 stages, CAP_NET_ADMIN
     make test-integration-container  # pamtester end-to-end + valgrind
     make trace-container             # seccomp allowlist trace
+- `make test-musl` rebuilds the unit suite against musl in a throwaway
+  Alpine container and runs it. The seccomp allowlist is derived from
+  glibc traces, and musl routes several libc operations through
+  different syscalls, so this is the only tier that catches a
+  musl-specific allowlist gap (see "Seccomp allowlist" below). Uses
+  `apk`, a separate package set from the host. Requires `podman`
+  (or `docker` via `CONTAINER_ENGINE=docker`).
   No host sudo required; no /etc/passwd, /etc/pam.d, nftables, or
   systemd mutation on the host. Requires `podman` only. Works on
   any host distro (Fedora, Arch, Debian, Ubuntu, RHEL, macOS via
@@ -239,6 +256,13 @@ Unit suite (`tests/test_suite.c`):
         pair via NETLINK_SOCK_DIAG
   10    Kernel-keyring tag round-trip: add_key → keyring_read_serial
         with full payload sanitization
+  11    collect_socket_inodes honors the INODES_CAP bound and reports
+        truncation
+  12    session_file_write produces 0640 root:root, degrading to
+        root:authnft where the group exists
+  13    Setup-path libc syscalls (heap, file read, NSS lookup, netlink
+        socket) survive the sandbox — guards against libc-specific
+        allowlist gaps such as the musl open/readv/writev class
 
 Integration suite (`tests/integration_test.sh`):
 
@@ -266,6 +290,21 @@ Integration suite (`tests/integration_test.sh`):
   10.16 Placeholder-dense fragment (eight rules each using
         @session_chain + @session_v4) loads under the ratio-based
         max_expand bound in substitute_placeholders
+  10.17 rhost_policy=strict denies a non-IP PAM_RHOST; lax binds
+        cgroup-only (the negative control that found the missing
+        uname/sendmmsg syscalls)
+  10.18 jump rule's kernel handle is captured at open and the rule is
+        deleted at close (no handle leak)
+  10.19 seccomp sandbox stays in the setup child; a command forked
+        after open_session survives (fork-child fix regression)
+  10.20 nft_handler_cleanup_orphan reaps a leftover per-session chain,
+        sets, and jump rule by name
+  10.21 a fragment-reject message reaches the user from the parent
+        (the sandboxed child cannot write sshd's loginmsg)
+  10.22 setup child killed after the jump rule commits — open_session
+        is denied and the orphaned nft state is reaped
+  10.23 pipe() failure (EMFILE) fails the session closed
+  10.24 fork() failure (EAGAIN) fails the session closed
   —     No memory errors or leaks under Valgrind memcheck
 
 
@@ -275,6 +314,7 @@ CI gates
 Every push and pull request triggers:
 
   - GCC + Clang build matrix
+  - musl build + unit suite on Alpine (.github/workflows/musl.yml)
   - cppcheck static analysis
   - CodeQL semantic analysis
   - ASan / UBSan sanitizer builds
@@ -354,6 +394,13 @@ lists these explicitly; subtract them before comparing against
 In both cases: compare against the allowlist in `src/sandbox.c` and
 add any newly observed production syscall with a one-line
 justification comment. Do not add syscalls without strace evidence.
+
+Both traces run against the host libc (glibc on Arch/Fedora), so they
+cannot show how musl dispatches the same operations. After changing
+the allowlist or adding a code path that reads or writes a file, run
+`make test-musl`: it builds against musl and runs unit stage 13, which
+fails closed (SIGSYS) on a musl-specific gap. The open/readv/writev
+entries were added this way.
 
 When a `strace` line names a syscall the allowlist does not yet cover,
 cross-reference https://filippo.io/linux-syscall-table/ — it lists

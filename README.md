@@ -561,12 +561,13 @@ make test-integration   # pamtester + valgrind, requires root
 
 Container workflows (recommended — no host mutation, requires `podman` only):
 ```
-make test-container              # unit suite, 10 stages, CAP_NET_ADMIN
+make test-container              # unit suite, 13 stages, CAP_NET_ADMIN
 make test-integration-container  # pamtester end-to-end + valgrind
 make trace-container             # seccomp allowlist trace
+make test-musl                   # unit suite built against musl (Alpine)
 ```
 
-For the unit + integration stage matrix (stages 0–10 and 10.1–10.13)
+For the unit + integration stage matrix (stages 0–13 and 10.1–10.24)
 and the CI gate inventory, see
 [docs/CONTRIBUTING.txt](docs/CONTRIBUTING.txt) § Tests.
 
