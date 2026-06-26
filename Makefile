@@ -199,6 +199,13 @@ test-container:
 	@mkdir -p $(RESULT_DIR) && echo unit > $(RESULT_DIR)/workflow
 	$(RUN_CONTAINER)
 
+# musl (Alpine) build + unit suite — catches libc-specific seccomp allowlist
+# gaps (the open/readv/writev class) that a glibc-only CI misses. The unit
+# suite's Stage 13 exercises the setup-path syscalls under the sandbox. See
+# ci/musl-test.sh.
+test-musl:
+	ci/musl-test.sh $(CURDIR)
+
 # Full pamtester integration flow inside the container. systemd
 # is running as PID 1, so StartTransientUnit over sd-bus works.
 # This replaces `sudo make test-integration` as the default
@@ -616,5 +623,5 @@ distclean: clean
 	@sudo rm -f /etc/pam.d/authnft_test /etc/authnft/users/$(TEST_USER)
 
 .PHONY: all debug clean fuzz fuzz-coverage reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-container \
-        test-integration-container trace trace-container trace-features \
+        test-integration-container test-musl trace trace-container trace-features \
         distclean install install-tmpfiles uninstall man install-man

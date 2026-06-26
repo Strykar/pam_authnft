@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <grp.h>
+#include <pwd.h>
 #include <nftables/libnftables.h>
 #include <signal.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <sys/personality.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <sys/capability.h>
 #include <sys/stat.h>
@@ -393,6 +395,54 @@ static void run_session_file_perms_test(void) {
            g ? "authnft" : "root", g ? "present" : "absent");
 }
 
+/* Stage 13: the setup path's libc operations must all survive the sandbox.
+ * The allowlist was derived from glibc syscall traces; this runs the same
+ * classes of operation the setup path uses (heap at the fragment-buffer scale,
+ * a file read, an NSS group + passwd lookup, a netlink socket) under the filter
+ * so a libc-specific syscall gap — the class that bit us with fchmod, uname,
+ * and sendmmsg, and the one most likely to differ on musl — surfaces as a
+ * SIGSYS here instead of denying a real session. Faithful to the real ops, so
+ * it passes on glibc; run under the musl tier it catches a musl-only gap. */
+static void run_sandbox_syscall_surface_test(void) {
+    if (is_audit_mode()) {
+        printf("[SKIP] Stage 13: Seccomp vs Valgrind conflict.\n");
+        return;
+    }
+    printf("[STAGE 13] Setup-path libc syscalls survive the sandbox...\n");
+    pid_t pid = fork();
+    if (pid == 0) {
+        sandbox_apply(NULL);
+        /* heap at fragment-buffer scale (brk/mmap/munmap) */
+        void *p = malloc(65536);
+        if (p) { memset(p, 0, 65536); free(p); }
+        /* a file read, like loading the user fragment (musl fread -> readv) */
+        FILE *f = fopen("/proc/self/status", "r");
+        if (f) { char b[512]; (void)!fread(b, 1, sizeof(b), f); fclose(f); }
+        /* a buffered stdio write (musl flushes through writev) */
+        FILE *w = fopen("/dev/null", "w");
+        if (w) { (void)!fwrite("x", 1, 1, w); fclose(w); }
+        /* NSS group + passwd resolution, like the authnft-group check */
+        (void)getgrnam("root");
+        struct passwd *pw = getpwnam("root");
+        if (pw) { int ng = 16; gid_t gl[16]; (void)getgrouplist("root", pw->pw_gid, gl, &ng); }
+        /* a netlink socket, like peer_lookup and libnftables */
+        int s = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, 0);
+        if (s >= 0) close(s);
+        _exit(42);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 42) {
+        printf("[PASS]\n");
+        return;
+    }
+    fprintf(stderr, "[FAIL] a setup-path syscall was blocked by the sandbox "
+            "(status %d%s) — a libc-specific syscall is missing from the "
+            "allowlist\n", status,
+            (WIFSIGNALED(status) && WTERMSIG(status) == SIGSYS) ? ", SIGSYS" : "");
+    exit(1);
+}
+
 int main(void) {
     printf("--- pam_authnft unit tests ---\n\n");
     run_input_validation_test();
@@ -407,6 +457,7 @@ int main(void) {
     run_keyring_test();
     run_inodes_cap_test();
     run_session_file_perms_test();
+    run_sandbox_syscall_surface_test();
     printf("\n[DONE]\n");
     return 0;
 }

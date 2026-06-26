@@ -50,8 +50,18 @@ int sandbox_apply(pam_handle_t *pamh) {
 
     /* File I/O — fragment reads, /proc/<pid>/cgroup, /etc/passwd, /etc/group */
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(openat), 0);
+    /* musl's fopen/open route through the legacy open(2) on x86_64 where glibc
+     * goes via openat; the fragment read and NSS lookups hit it on a musl
+     * build. Allowlist both so the module is portable across libcs. */
+    rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(open), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(read), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(write), 0);
+    /* musl routes stdio through the vectored read/write where glibc uses the
+     * scalar pair: the fragment read (fopen + fread in read_file) lands on
+     * readv on a musl build. Same I/O class as read/write; allowlisting both
+     * keeps the module portable across libcs without a build flag. */
+    rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(readv), 0);
+    rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(writev), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(close), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(lseek), 0);
     rc |= seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(pread64), 0);
