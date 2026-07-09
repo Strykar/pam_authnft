@@ -50,7 +50,8 @@ fi
 GROUP_FRAG_10_8=""
 S1011_PIDS=()
 cleanup() {
-    rm -f "$RULES_DIR/$TEST_USER" "$PAM_TEST_CONF" /etc/pam.d/authnft_strict
+    rm -f "$RULES_DIR/$TEST_USER" "$PAM_TEST_CONF" /etc/pam.d/authnft_strict \
+        /etc/pam.d/authnft_kernel
     [[ -n "$GROUP_FRAG_10_8" ]] && rm -f "$GROUP_FRAG_10_8"
     if (( ${#S1011_PIDS[@]} > 0 )); then
         kill "${S1011_PIDS[@]}" 2>/dev/null || true
@@ -915,5 +916,156 @@ if LD_PRELOAD="$FAULT_PRELOAD" AUTHNFT_FAULT_FORK=1 \
     fail "10.24: open_session succeeded despite fork() failure"
 fi
 pass "10.24: fork() failure -> session denied (fail-closed)"
+
+# 10.25: rhost_policy=kernel across the sshd privsep boundary. The man
+# page claims the kernel lookup is expected to succeed under sshd because
+# pam_open_session runs in the privileged monitor and that process holds
+# the client TCP socket. Two arms make that claim executable:
+#   control (pamtester): the PAM caller has no ESTABLISHED TCP socket, so
+#     peer_lookup_tcp must fail and must log "kernel peer lookup failed".
+#     This proves the absence-of-line check in the sshd arm can fail.
+#   claim (sshd loopback): a session on a rhost_policy=kernel stack must
+#     yield a v4 element and must not log the fallback line. With
+#     UseDNS yes and 127.0.0.1 reverse-resolving to "localhost",
+#     PAM_RHOST is not an IP literal, so a lax fallback would land in the
+#     cgroup-only set; the v4 element is then reachable only through the
+#     kernel-derived peer. Without reverse resolution the arm still holds
+#     through element-present plus fallback-line-absent.
+# The sshd arm points sshd at its own PAM stack via PAMServiceName, so it
+# does not depend on /etc/pam.d/sshd (unlike 10.15). PAMServiceName needs
+# OpenSSH >= 9.8; older sshd fails config validation and the arm skips.
+nft delete table inet authnft 2>/dev/null || true
+printf "${YELLOW}10.25: rhost_policy=kernel resolves the peer in sshd's monitor${RESET}\n"
+
+PAM_KERNEL_CONF=/etc/pam.d/authnft_kernel
+printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsession  required  %s rhost_policy=kernel\npassword required  pam_deny.so\n' \
+    "$SO_PATH" > "$PAM_KERNEL_CONF"
+
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"
+chmod 644 "$FRAGMENT"
+
+T1025=$(date '+%Y-%m-%d %H:%M:%S')
+sleep 1.1   # journalctl --since has one-second granularity
+if ! pamtester -I rhost=localhost authnft_kernel "$TEST_USER" \
+        open_session close_session </dev/null >/dev/null 2>&1; then
+    rm -f "$PAM_KERNEL_CONF"
+    fail "10.25: control arm: open+close failed under rhost_policy=kernel"
+fi
+if ! journalctl --since "$T1025" 2>/dev/null \
+        | grep -q 'kernel peer lookup failed for pid'; then
+    rm -f "$PAM_KERNEL_CONF"
+    fail "10.25: control arm: 'kernel peer lookup failed' line missing (a socketless caller must take the fallback path)"
+fi
+
+if ! command -v sshd >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1 || \
+   ! command -v ssh >/dev/null 2>&1; then
+    rm -f "$PAM_KERNEL_CONF"
+    pass "10.25: [SKIP] control arm passed; sshd / ssh-keygen / ssh missing for the sshd arm"
+else
+    SAVED_SHELL_1025=$(getent passwd "$TEST_USER" | cut -d: -f7)
+    usermod -s /bin/sh "$TEST_USER" 2>/dev/null || true
+    K_DIR=$(mktemp -d)
+    K_PID_FILE="$K_DIR/sshd.pid"
+    s1025_cleanup() {
+        if [[ -f "$K_PID_FILE" ]]; then
+            kill "$(cat "$K_PID_FILE")" 2>/dev/null || true
+        fi
+        usermod -s "$SAVED_SHELL_1025" "$TEST_USER" 2>/dev/null || true
+        rm -f "$PAM_KERNEL_CONF"
+        rm -rf "$K_DIR"
+        # This trap replaces 10.15's; chain its deferred restore work so
+        # a run that executed both stages still unwinds 10.15.
+        if declare -F s1015_cleanup >/dev/null; then s1015_cleanup; fi
+    }
+    trap 's1025_cleanup; cleanup' EXIT
+
+    K_AUTHKEYS_DIR=$(getent passwd "$TEST_USER" | cut -d: -f6)/.ssh
+    ssh-keygen -t ed25519 -N '' -f "$K_DIR/host_ed25519" -q
+    ssh-keygen -t ed25519 -N '' -f "$K_DIR/client_ed25519" -q
+    mkdir -p "$K_AUTHKEYS_DIR"
+    cat "$K_DIR/client_ed25519.pub" > "$K_AUTHKEYS_DIR/authorized_keys"
+    chown -R "$TEST_USER:$TEST_USER" "$K_AUTHKEYS_DIR"
+    chmod 700 "$K_AUTHKEYS_DIR"
+    chmod 600 "$K_AUTHKEYS_DIR/authorized_keys"
+
+    cat > "$K_DIR/sshd_config" <<EOF
+Port 22226
+ListenAddress 127.0.0.1
+HostKey $K_DIR/host_ed25519
+PidFile $K_PID_FILE
+UsePAM yes
+PAMServiceName authnft_kernel
+PasswordAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PermitUserEnvironment no
+StrictModes no
+UseDNS yes
+LogLevel DEBUG3
+EOF
+
+    SSHD_BIN=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
+    if ! "$SSHD_BIN" -t -f "$K_DIR/sshd_config" >/dev/null 2>&1; then
+        pass "10.25: [SKIP] control arm passed; sshd rejects the config (PAMServiceName needs OpenSSH >= 9.8)"
+    else
+        T1025B=$(date '+%Y-%m-%d %H:%M:%S')
+        sleep 1.1
+        "$SSHD_BIN" -f "$K_DIR/sshd_config" -E "$K_DIR/sshd.log"
+        sleep 0.4
+        if [[ ! -s "$K_PID_FILE" ]]; then
+            echo "sshd failed to start; log tail:" >&2
+            tail -20 "$K_DIR/sshd.log" >&2
+            pass "10.25: [SKIP] control arm passed; sshd refused to start (port in use?)"
+        else
+            # Hold the session open long enough to snapshot live state.
+            ssh -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -o BatchMode=yes \
+                -o ConnectTimeout=5 \
+                -i "$K_DIR/client_ed25519" -p 22226 \
+                "$TEST_USER@127.0.0.1" 'echo AUTHNFT_K_UP; sleep 3' \
+                > "$K_DIR/ssh.out" 2> "$K_DIR/ssh.err" &
+            K_SSH_PID=$!
+            K_UP=0
+            for _ in $(seq 1 50); do
+                if grep -q AUTHNFT_K_UP "$K_DIR/ssh.out" 2>/dev/null; then
+                    K_UP=1
+                    break
+                fi
+                sleep 0.2
+            done
+            if [[ $K_UP -ne 1 ]]; then
+                cat "$K_DIR/ssh.err" >&2
+                tail -30 "$K_DIR/sshd.log" >&2
+                fail "10.25: sshd arm: session did not come up"
+            fi
+            nft list table inet authnft > "$K_DIR/during.txt" 2>&1 || true
+            wait "$K_SSH_PID" || true
+            sleep 0.5
+
+            if ! grep -q "session_${SAFE_USER}_[0-9]*_v4" "$K_DIR/during.txt" || \
+               ! grep -A3 "session_${SAFE_USER}_[0-9]*_v4" "$K_DIR/during.txt" \
+                    | grep -q '127\.0\.0\.1'; then
+                cat "$K_DIR/during.txt" >&2
+                fail "10.25: sshd arm: no v4 element with 127.0.0.1 during the session"
+            fi
+            if journalctl --since "$T1025B" 2>/dev/null \
+                    | grep -q 'kernel peer lookup failed for pid'; then
+                fail "10.25: sshd arm: kernel lookup fell back under sshd (monitor did not resolve the peer)"
+            fi
+            if journalctl --since "$T1025B" 2>/dev/null \
+                    | grep -q 'using kernel-derived peer'; then
+                pass "10.25: kernel peer resolved in the monitor (PAM_RHOST was a hostname; v4 element only reachable via sock_diag)"
+            else
+                pass "10.25: kernel peer resolved in the monitor (PAM_RHOST already an IP; proven by v4 element + no fallback line)"
+            fi
+        fi
+    fi
+fi
+nft delete table inet authnft 2>/dev/null || true
 
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

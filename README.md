@@ -570,7 +570,7 @@ make trace-container             # seccomp allowlist trace
 make test-musl                   # unit suite built against musl (Alpine)
 ```
 
-For the unit + integration stage matrix (stages 0–13 and 10.1–10.24)
+For the unit + integration stage matrix (stages 0–13 and 10.1–10.25)
 and the CI gate inventory, see
 [docs/CONTRIBUTING.txt](docs/CONTRIBUTING.txt) § Tests.
 

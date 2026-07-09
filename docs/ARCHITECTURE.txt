@@ -75,7 +75,10 @@ v4-mapped v6 extraction) and the module logs a warning when the
 normalized kernel-reported address diverges from `PAM_RHOST`. This catches
 PROXY-protocol / load-balancer misconfigurations and `UseDNS`
 hostname aliasing for free, and removes the PAM caller from the trust
-path for the src_ip binding.
+path for the src_ip binding. Integration stage 10.25 validates the
+sshd path empirically: the privileged monitor that runs open_session
+holds the client TCP socket, so the lookup resolves the peer even
+when `UseDNS yes` hands PAM a hostname.
 
 
 Open-session sequence

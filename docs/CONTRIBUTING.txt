@@ -305,6 +305,10 @@ Integration suite (`tests/integration_test.sh`):
         is denied and the orphaned nft state is reaped
   10.23 pipe() failure (EMFILE) fails the session closed
   10.24 fork() failure (EAGAIN) fails the session closed
+  10.25 rhost_policy=kernel resolves the peer from inside sshd's
+        privileged monitor (real sshd loopback on a PAMServiceName
+        stack); a socketless pamtester control proves the fallback
+        path logs when no TCP socket exists
   —     No memory errors or leaks under Valgrind memcheck
 
 
