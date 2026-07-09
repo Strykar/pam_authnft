@@ -108,9 +108,13 @@ pam_authnft; sanitization and truncation are performed on read.
 
 2.2 Producer requirements
 
-    MUST use pam_putenv(3) to set the env variable. libc putenv(3) is
-    not carried across the sshd privsep fork by import_environments()
-    and will silently fail to reach pam_authnft on sshd stacks.
+    MUST use pam_putenv(3) to set the env variable. pam_authnft reads
+    it with pam_getenv(3), which sees only the PAM environment. libc
+    putenv(3) writes the process environment instead: sshd's
+    import_environments() replays pam_getenvlist(3) entries into the
+    PAM handle that runs the session stack, but process-environment
+    strings are exported to the user session only, so a putenv(3)
+    value silently fails to reach pam_authnft.
 
     MUST use the "user" key type. Other types (keyring, logon, big_key)
     are not supported.

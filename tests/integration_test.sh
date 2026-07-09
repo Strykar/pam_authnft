@@ -622,8 +622,8 @@ nft delete table inet authnft 2>/dev/null || true
 # Historical note: this stage was added under the (incorrect) hypothesis
 # that pam_open_session and pam_close_session ran in different processes
 # under sshd's privsep model. In current OpenSSH (sshd-session.c at
-# V_10_3_P1, do_pam_session called at line 1280 before privsep_postauth
-# at line 1288), both run in the monitor — the same process. The
+# V_10_4_P1, do_pam_session called at line 1281 before privsep_postauth
+# at line 1289), both run in the monitor — the same process. The
 # pam_set_data path is sufficient; the env carry that originally
 # motivated this stage has been removed. The test still earns its keep
 # as the only stage that drives real sshd through the project, so a

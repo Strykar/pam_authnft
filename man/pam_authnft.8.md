@@ -56,13 +56,15 @@ The module exports only **pam_sm_open_session** and
     inode scan is capped at **INODES_CAP** (64); if the session PID
     holds more socket inodes, a **LOG_WARNING** is emitted and the
     lookup may miss the session's TCP socket.
-    **sshd privsep caveat:** on OpenSSH >= 9.x with the default
-    privsep configuration, the postauth PAM child may not hold the SSH
-    TCP socket's file descriptor in its */proc/\<pid\>/fd/* — the
-    socket is owned by the unprivileged sshd network process, not the
-    privileged monitor that runs PAM. The lookup will fall through to
-    **rhost_policy=lax** in this case. Test against your target
-    OpenSSH version before relying on this policy in production.
+    **sshd privsep note:** sshd runs **pam_open_session**(3) in its
+    privileged monitor process, and that process keeps the client TCP
+    socket open for the life of the connection, so the kernel lookup
+    is expected to succeed there. Verified against the OpenSSH 10.4
+    source, whose README.privsep documents the multi-binary privsep
+    model. On a server whose PAM caller does not hold the connection
+    socket, the lookup falls through to **rhost_policy=lax**. Test
+    against your target OpenSSH version before relying on this policy
+    in production.
 
 **claims_env=NAME**
 :   Look up PAM environment variable *NAME* for a kernel-keyring serial

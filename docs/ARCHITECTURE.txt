@@ -242,8 +242,8 @@ Trust model
       inode. The match fires.
     - **Class B (pre-scope):** sockets that existed before
       `bus_handler_start` ran — including the SSH TCP connection
-      itself (accepted by sshd, inherited by the privsep child, all
-      before the PAM session stack runs). These carry sshd's cgroup
+      itself (accepted by the sshd listener, inherited by sshd-session,
+      all before the PAM session stack runs). These carry sshd's cgroup
       (typically `system.slice`). `socket cgroupv2 level 2` returns
       that cgroup, NOT the session scope. The match does not fire.
   Class B traffic survives because pam_authnft adds

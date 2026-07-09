@@ -413,9 +413,12 @@ Why the keyring rather than a file or env var alone:
   the keyring (POSSESSOR check).
 - **No filesystem footprint.** Nothing to write, sync, or unlink. No
   race conditions, no leftover state on crash.
-- **Survives the sshd privsep fork.** Unlike shell env vars, kernel
-  keys remain readable across the auth-worker → session-worker
-  transition that happens inside sshd.
+- **Survives sshd's privilege separation.** sshd runs its whole PAM
+  stack in the privileged monitor process and in forks of it that
+  share the session keyring, so a key added during authentication is
+  still readable when pam_authnft runs at open_session. The sandboxed
+  pre-auth binary (sshd-auth, OpenSSH >= 10.0) never runs PAM and is
+  not on this path.
 
 ### PAM stack options
 
