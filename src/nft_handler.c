@@ -109,6 +109,46 @@ static void nft_partial_cleanup(struct nft_ctx *ctx,
     (void)nft_run_cmd_from_buffer(ctx, cmd);
 }
 
+/*
+ * Resolve authnft group membership via getgrouplist(3), which consults the
+ * full NSS stack (compat, files, sss, ldap, systemd, ...) and returns every
+ * group the user is in, including the primary — unlike a gr_mem walk, which
+ * is empty on sssd/ldap hosts with the default enumerate=false. Returns 1 if
+ * `user` is a member of the 'authnft' group, 0 otherwise (including when the
+ * group or the user does not resolve).
+ *
+ * Runs in the UNSANDBOXED parent by design. NSS backends dlopen modules that
+ * issue syscalls the seccomp allowlist does not cover — sssd/ldap open their
+ * own sockets and nss_ldap can drive a TLS handshake — and the allowlist was
+ * derived from a files-backend trace. Resolving membership inside the
+ * sandboxed setup child would SIGSYS-kill a legitimate directory user's
+ * session. NSS configuration is trusted admin data, not the fragment-parse
+ * surface the sandbox exists to contain, so the resolution belongs in the
+ * parent (see run_sandboxed_nft_setup in src/pam_entry.c).
+ */
+int nft_user_in_authnft_group(pam_handle_t *pamh, const char *user) {
+    (void)pamh;
+    struct group *grp = getgrnam("authnft");
+    if (!grp) return 0;
+    struct passwd *pw = getpwnam(user);
+    if (!pw) return 0;
+
+    int ngroups = 64;
+    gid_t groups[64];
+    int rc = getgrouplist(user, pw->pw_gid, groups, &ngroups);
+    if (rc >= 0)
+        return user_in_group(grp->gr_gid, groups, (size_t)ngroups) ? 1 : 0;
+
+    /* Buffer too small — user belongs to >64 groups. Allocate the size
+     * getgrouplist reported and retry once. */
+    gid_t *big = calloc((size_t)ngroups, sizeof(gid_t));
+    if (!big) return 0;
+    rc = getgrouplist(user, pw->pw_gid, big, &ngroups);
+    int in = (rc >= 0) && user_in_group(grp->gr_gid, big, (size_t)ngroups);
+    free(big);
+    return in;
+}
+
 int nft_handler_setup(pam_handle_t *pamh, const char *user,
                       int session_pid, authnft_session_t *sd,
                       authnft_reject_reason *reason) {
@@ -128,48 +168,10 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     DEBUG_PRINT("nft_handler_setup: user=%s cg=%s chain=%s",
                 user, sd->cg_path, sd->chain_name);
 
-    /* Group membership check via getgrouplist(3).
-     *
-     * Earlier code walked grp->gr_mem from getgrnam("authnft"). On hosts
-     * with SSSD or sssd-ldap and the (default) enumerate=false setting,
-     * gr_mem is empty even when the user is a legitimate member through
-     * directory memberOf. The user would silently fall through to
-     * "not in group, passing through" and never get the per-session
-     * firewall rules — a fail-safe but surprising failure mode.
-     *
-     * getgrouplist(3) consults the full NSS resolution (compat, files,
-     * sss, ldap, ...) and returns every group the user is in, including
-     * the primary. Match the authnft GID against that list. */
-    struct group *grp = getgrnam("authnft");
-    bool in_group = false;
-    if (grp) {
-        struct passwd *pw = getpwnam(user);
-        if (pw) {
-            int ngroups = 64;
-            gid_t groups[64];
-            int rc = getgrouplist(user, pw->pw_gid, groups, &ngroups);
-            if (rc < 0) {
-                /* Buffer too small — user belongs to >64 groups. Allocate
-                 * the size getgrouplist reported and retry once. */
-                gid_t *big = calloc((size_t)ngroups, sizeof(gid_t));
-                if (big) {
-                    rc = getgrouplist(user, pw->pw_gid, big, &ngroups);
-                    if (rc >= 0)
-                        in_group = user_in_group(grp->gr_gid, big,
-                                                 (size_t)ngroups);
-                    free(big);
-                }
-            } else {
-                in_group = user_in_group(grp->gr_gid, groups,
-                                         (size_t)ngroups);
-            }
-        }
-    }
-
-    if (!in_group) {
-        DEBUG_PRINT("user %s not in 'authnft' group, passing through", user);
-        return PAM_SUCCESS;
-    }
+    /* authnft group membership was resolved by the caller in the
+     * unsandboxed parent (nft_user_in_authnft_group, from
+     * pam_sm_open_session before the fork) so no NSS backend runs under
+     * the seccomp filter. A non-member never reaches this function. */
 
     /* Fragment validation: must exist, be root-owned, and not world-writable. */
     snprintf(user_conf_path, sizeof(user_conf_path), "%s/%s", RULES_DIR, user);

@@ -202,6 +202,18 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
         return PAM_SUCCESS;
     }
 
+    /* Resolve authnft group membership here, in the unsandboxed parent,
+     * before any scope/peer/keyring work and before the sandboxed fork.
+     * NSS backends (sss, ldap, systemd) can dlopen modules and issue
+     * syscalls outside the seccomp allowlist; doing the lookup here keeps a
+     * directory user's session from being SIGSYS-killed inside the setup
+     * child. A non-member is not managed by authnft — pass through with no
+     * scope, no rules, no session file. */
+    if (!nft_user_in_authnft_group(pamh, user)) {
+        DEBUG_PRINT("PAM: user %s not in 'authnft' group, passing through", user);
+        return PAM_SUCCESS;
+    }
+
     DEBUG_PRINT("PAM: open_session for user=%s pid=%d", user, session_pid);
 
     /*

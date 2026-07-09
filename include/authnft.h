@@ -89,9 +89,19 @@ typedef enum {
 } authnft_reject_reason;
 
 /*
+ * nft_user_in_authnft_group:
+ * Resolves whether `user` is a member of the 'authnft' group via
+ * getgrouplist(3) (full NSS). Returns 1 for a member, 0 otherwise. MUST be
+ * called from the unsandboxed parent (pam_sm_open_session), never inside the
+ * seccomp-sandboxed setup child: NSS backends (sss, ldap, systemd) can issue
+ * syscalls outside the allowlist and would SIGSYS-kill the child.
+ */
+int nft_user_in_authnft_group(pam_handle_t *pamh, const char *user);
+
+/*
  * nft_handler_setup:
- * Checks 'authnft' group membership, validates the user's root-owned fragment
- * (verb scan, include-path check), creates the per-session chain and three
+ * Validates the user's root-owned fragment (verb scan, include-path check),
+ * creates the per-session chain and three
  * per-session sets, inserts the session element, captures the jump-rule
  * handle, and loads the fragment with nftables placeholders substituted
  * for the four per-session names (@session_v4, @session_v6, @session_cg,
