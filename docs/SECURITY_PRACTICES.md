@@ -23,7 +23,7 @@ column lists the bug class or signal each tool produces.
 | **cppcheck** | `.github/workflows/cppcheck.yml` | every PR | static analysis: dangerous constructs, leaks, simple misuse |
 | **CodeQL** | `.github/workflows/codeql.yml` | every PR | static taint analysis, OWASP-style classes |
 | **Coverity Scan** | `.github/workflows/coverity.yml` | weekly cron | deeper static analysis (path-sensitive, inter-procedural) |
-| **AddressSanitizer + UBSan** | `.github/workflows/sanitizers.yml` | every PR | build-only validation that the .so links cleanly with sanitizers (test-run conflicts with seccomp) |
+| **AddressSanitizer + UBSan + LeakSanitizer** | `.github/workflows/sanitizers.yml` | every PR | `sanitizer-link` proves the .so links under each sanitizer; `sanitized-tests` runs the unit suite under ASan+UBSan+LSan in `AUTHNFT_AUDIT_MODE=1` (skips only the seccomp stages that conflict with the sanitizer runtime), giving real leak-checked execution of the sanitization, cgroup-path, rhost, netlink peer-parser, keyring, and inode-cap paths |
 | **OpenSSF Scorecard** | `.github/workflows/scorecard.yml` | weekly cron + push | supply-chain hygiene (pinned action versions, branch protection, signed releases, dangerous workflows) |
 | **OpenSSF Best Practices** | bestpractices.dev project 12496 | manual self-attest | governance / policy items the badge program tracks |
 | **CIFuzz** | `.github/workflows/cifuzz.yml` | every PR | 60 s × 8 fuzz harnesses (memory-safety regressions) |

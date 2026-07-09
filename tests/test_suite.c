@@ -142,6 +142,15 @@ static void run_cgroup_logic_test(void) {
  * Fedora's `checksec` accepts `--file=<path>`. Try both. */
 static void run_checksec_test(void) {
     printf("[STAGE 6] Binary hardening (checksec)...\n");
+    if (is_audit_mode()) {
+        /* The hardening profile is a property of the production build. Under
+         * a sanitizer or valgrind build the flags legitimately differ (and
+         * the .so may not be the artifact under test), so this check belongs
+         * to the normal build and the dedicated checksec CI job, not here. */
+        printf("[SKIP] Stage 6: hardening check runs against the production "
+               "build, not the sanitizer/valgrind build.\n");
+        return;
+    }
     if (system("command -v checksec > /dev/null 2>&1") != 0) {
         printf("[SKIP] checksec not found.\n");
         return;

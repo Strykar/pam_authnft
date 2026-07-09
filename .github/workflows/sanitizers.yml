@@ -9,7 +9,11 @@ permissions:
   contents: read
 
 jobs:
-  sanitizers:
+  # Build-only: proves the shared object links cleanly under each sanitizer.
+  # This does NOT execute code — the runtime coverage is the sanitized-tests
+  # job below. Kept as a separate, clearly-named check so a green tick here is
+  # not mistaken for runtime sanitizer coverage.
+  sanitizer-link:
     strategy:
       fail-fast: false
       matrix:
@@ -23,13 +27,41 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
-      - name: Build with -fsanitize=${{ matrix.sanitizer }}
-        # Build-only: the test harness's seccomp sandbox + fork/exec scaffold
-        # tangles with ASan's signal/leak interceptors under CI.  We run
-        # sanitized tests locally against the full system; here we just prove
-        # the sanitized shared object links cleanly.
+      - name: Link pam_authnft.so with -fsanitize=${{ matrix.sanitizer }}
         run: |
           make CFLAGS_BASE="-fPIC -Wall -Wextra -g -O1 -Iinclude -D_GNU_SOURCE \
             -fno-omit-frame-pointer -fsanitize=${{ matrix.sanitizer }}" \
             LDFLAGS_BASE="-fsanitize=${{ matrix.sanitizer }}" \
             all
+
+  # Runtime: run the unit suite under ASan + UBSan with LeakSanitizer ON.
+  # AUTHNFT_AUDIT_MODE=1 skips only the three seccomp stages whose
+  # SCMP_ACT_KILL default conflicts with the sanitizer's own syscalls; every
+  # other stage executes, giving real sanitized + leak-checked coverage of the
+  # attacker-influenced runtime paths (input sanitization, cgroup-path
+  # validation, PAM_RHOST normalization, the NETLINK_SOCK_DIAG peer parser,
+  # the keyring payload read, and the /proc inode-cap scan). This is the gate
+  # that makes "sanitizers passing" mean the module was executed under the
+  # sanitizers, not merely linked.
+  sanitized-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
+      - name: Build the unit suite under ASan + UBSan
+        run: |
+          make CFLAGS_BASE="-fPIC -Wall -Wextra -g -O1 -Iinclude -D_GNU_SOURCE \
+            -fno-omit-frame-pointer -fsanitize=address,undefined" \
+            LDFLAGS_BASE="-fsanitize=address,undefined" \
+            authnft_test
+      - name: Run the unit suite under ASan + UBSan + LeakSanitizer
+        env:
+          AUTHNFT_AUDIT_MODE: "1"
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ./authnft_test
