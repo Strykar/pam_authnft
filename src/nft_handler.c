@@ -315,26 +315,45 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         /* "chain already exists" / "set already exists" on call 1 has a
          * specific operational cause: a previous session for the same
          * (user, pid) leaked its per-session state (privsep close-session
-         * leak, OOM-killed daemon, kernel panic, etc.) and the 24h
-         * element timeout has not yet evicted it. PIDs recycle on busy
-         * hosts within minutes; a user opening a new session that lands
-         * on the same PID hits this path. Surface it distinctly so an
-         * operator can recognize the symptom and clean up by hand
-         * (`nft delete chain inet authnft session_<user>_<pid>` and the
-         * matching sets). */
-        if (err_msg && (strstr(err_msg, "exists") || strstr(err_msg, "EEXIST"))) {
-            pam_syslog(pamh, LOG_ERR,
-                       "authnft: setup call 1 failed (per-session state for "
-                       "%s/%s already present — likely PID-recycle after a "
-                       "leaked session; check `nft list table inet authnft` "
-                       "for stale chain/sets): %s",
-                       user, sd->chain_name, err_msg);
+         * leak, OOM-killed daemon, kernel panic, etc.). The per-session
+         * chain, sets, and jump rule have no timeout of their own — only
+         * the element does — so the leak survives until the same PID
+         * recycles. PIDs recycle on busy hosts within minutes; a user
+         * opening a new session on the recycled PID lands on the stale
+         * names and, without recovery, is denied a session (fail-closed
+         * self-lockout). Self-heal: reap the stale (user, pid) state by
+         * name (recovers the old jump handle by listing the shared chain,
+         * same as nft_handler_cleanup_orphan), then retry call 1 once. */
+        /* Stale per-session state surfaces as "already exists" (EEXIST) or,
+         * when a leftover set is still referenced, "Device or resource busy"
+         * (EBUSY), depending on which object collides and the nft version.
+         * Match both. The recovery is scoped to this (user, pid) name and
+         * retried once, so a false match on an unrelated error costs only a
+         * no-op cleanup and a single retry that fails the same way. */
+        if (err_msg && (strstr(err_msg, "exists") || strstr(err_msg, "EEXIST") ||
+                        strstr(err_msg, "busy") || strstr(err_msg, "BUSY"))) {
+            pam_syslog(pamh, LOG_WARNING,
+                       "authnft: setup call 1 hit stale per-session state for "
+                       "%s/%s (likely PID-recycle after a leaked session) — "
+                       "reaping it and retrying",
+                       user, sd->chain_name);
+            (void)nft_handler_cleanup_orphan(pamh, user, sd);
+            if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
+                err_msg = nft_ctx_get_error_buffer(ctx);
+                pam_syslog(pamh, LOG_ERR,
+                           "authnft: setup call 1 still failing after reaping "
+                           "stale state for %s/%s: %s",
+                           user, sd->chain_name, err_msg);
+                free(frag_buf);
+                nft_ctx_free(ctx);
+                return PAM_SERVICE_ERR;
+            }
         } else {
             pam_syslog(pamh, LOG_ERR, "authnft: setup call 1 failed: %s", err_msg);
+            free(frag_buf);
+            nft_ctx_free(ctx);
+            return PAM_SERVICE_ERR;
         }
-        free(frag_buf);
-        nft_ctx_free(ctx);
-        return PAM_SERVICE_ERR;
     }
 
     /*
