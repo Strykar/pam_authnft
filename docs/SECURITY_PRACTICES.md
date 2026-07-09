@@ -31,8 +31,8 @@ column lists the bug class or signal each tool produces.
 | **Mutation testing (mull)** | `.github/workflows/mutation.yml` + `make mutation-report` | weekly Sunday 06:43 UTC | LLVM-IR mutations across `src/*.c` + `tests/test_suite.c`; surviving mutations indicate either coverage gaps or dead code |
 | **Differential oracle** | `tests/oracle/`, run via `make test` | every PR | logic bugs in 5 small parsers (C vs Python re-implementation diff) |
 | **Property-based tests** | `tests/oracle/properties.py` | every PR | idempotence + round-trip violations on the same 5 parsers |
-| **Unit suite** | `tests/test_suite.c`, run via `make test` | every PR | 10 stages: symbol whitelist, sanitization, sandbox kill/survive, cgroup invariant, hardening flags, peer lookup, keyring fetch |
-| **Integration suite** | `tests/integration_test.sh` | manual / container | pamtester open+close cycles, leftover-state assertions, per-session isolation, failure-path rollback |
+| **Unit suite** | `tests/test_suite.c`, run via `make test` | every PR | 14 stages (0-13): symbol whitelist, sanitization, sandbox kill/survive, nft dry-run, cgroup invariant, hardening flags, rhost normalization, peer lookup, keyring fetch, inode cap, session-file perms, setup-path syscall coverage |
+| **Integration suite** | `tests/integration_test.sh` | manual / container | pamtester open+close cycles, leftover-state assertions, per-session isolation, failure-path rollback, real-sshd loopback (privsep close boundary, kernel peer lookup) |
 | **valgrind on unit suite** | `make test-integration` | manual | leaks, use-after-free, double-free |
 | **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps |
 | **fuzz-coverage measurement** | `make fuzz-coverage` → `docs/fuzz-coverage/` | manual / per-PR | per-function fuzz region/line/branch coverage; gates the ≥90% bar in `docs/FUZZ_SURFACE.md` |
@@ -53,7 +53,6 @@ Each artefact below has a single owner-doc. Don't duplicate; cross-link.
 | Build reproducibility expectations | [`docs/REPRODUCIBLE_BUILDS.md`](REPRODUCIBLE_BUILDS.md) |
 | Architecture / lifecycle / trust model | [`docs/ARCHITECTURE.txt`](ARCHITECTURE.txt) |
 | Stable producer/consumer contracts | [`docs/INTEGRATIONS.txt`](INTEGRATIONS.txt) |
-| Doc update matrix by change type | [`docs/DOC_CHECKLIST.txt`](DOC_CHECKLIST.txt) |
 | Build invariants + style + concurrency claims | [`docs/CONTRIBUTING.txt`](CONTRIBUTING.txt) |
 
 ## Security goals

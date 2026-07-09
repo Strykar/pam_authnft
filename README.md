@@ -648,7 +648,6 @@ Advisories](https://github.com/identd-ng/pam_authnft/security/advisories)
 | [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) | Stable contracts for producers and consumers: PAM stack (§1), claims_env keyring (§2), nft fragment composition (§4.6), systemd scopes (§5), session JSON (§5.6), structured journal events (§6.2), Linux audit-syscall events (§6.2.7) |
 | [docs/CONTRIBUTING.txt](docs/CONTRIBUTING.txt) | Build, layout, invariants, style, test procedures, seccomp allowlist derivation |
 | [docs/TODO.txt](docs/TODO.txt) | Near-term, medium-term, and deferred work items |
-| [docs/DOC_CHECKLIST.txt](docs/DOC_CHECKLIST.txt) | Documentation update matrix by change type |
 | [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) | Authoritative dependency inventory: licenses, version floors, security feeds |
 | [docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md) | Internal runbook for handling a security report (the public policy is [SECURITY.md](SECURITY.md)) |
 | [docs/SECURITY_PRACTICES.md](docs/SECURITY_PRACTICES.md) | Single-page overview of every security tool, doc, goal, and milestone in the project |

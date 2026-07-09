@@ -143,7 +143,7 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
   blocked syscall must SIGSYS; Stage 3 = an allowlisted syscall survives;
   Stage 13 = the setup-path libc syscall surface survives), which the audit
   runs with the sandbox active.
-- The integration suite (24 stages) runs green in its own booted-systemd
+- The integration suite (25 stages) runs green in its own booted-systemd
   container via `make test-integration-container`; stages 10.19-10.24 cover
   the fork-child sandbox fix (the session fork survives the sandbox, orphan
   nft state is reaped, and fork/pipe/child-death faults fail the session
@@ -164,3 +164,6 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
 - Tier 1 shares the host kernel under a nested cgroup namespace, so the
   socket-cgroupv2 packet-classification stages (10.11/10.12) that need a
   real cgroup hierarchy are a tier-2 concern.
+- The container image ships no sshd, so 10.25 runs only its pamtester
+  control arm there and skips the sshd loopback arm; the full stage needs
+  a host with sshd (any OpenSSH >= 9.8, for PAMServiceName).
