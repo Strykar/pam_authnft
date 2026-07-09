@@ -499,16 +499,11 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
     if (!ctx) return PAM_SESSION_ERR;
 
     /*
-     * Tear down per-session state in dependency order:
-     *   1. Delete the jump rule from the shared filter chain (by handle).
-     *   2. Flush the per-session chain (removes all rules, unblocking
-     *      set deletion).
-     *   3. Delete the per-session chain.
-     *   4. Delete the three per-session sets.
-     *
-     * A single transaction ensures atomicity. If any object was already
-     * reaped (timeout, manual cleanup), the transaction fails; we fall
-     * through to the best-effort path.
+     * Fast path: tear down the whole per-session state in one transaction,
+     * in dependency order — jump rule first (a chain cannot be deleted
+     * while a rule jumps to it), then flush+delete the chain (removing the
+     * fragment rules that reference the sets), then the three sets. This is
+     * the normal close, where every object still exists.
      */
     int n = snprintf(cmd, sizeof(cmd),
              "delete rule inet %s filter handle %" PRIu64 "\n"
@@ -530,13 +525,43 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
     }
 
     DEBUG_PRINT("cleanup:\n%s", cmd);
-    if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
-        const char *err_msg = nft_ctx_get_error_buffer(ctx);
-        pam_syslog(pamh, LOG_WARNING,
-                   "authnft: cleanup failed for %s: %s", user, err_msg);
+    if (nft_run_cmd_from_buffer(ctx, cmd) == 0) {
         nft_ctx_free(ctx);
-        return PAM_SESSION_ERR;
+        return PAM_SUCCESS;
     }
+
+    /*
+     * The atomic transaction aborted because one object was already gone —
+     * the 24h element timeout reaped it, a prior orphan reap ran, or an
+     * operator cleaned up by hand. nftables rolls the whole transaction
+     * back on the first failure, so the other five objects are still in the
+     * kernel. Delete each in its own transaction, same dependency order, so
+     * a single missing object cannot strand the rest. Every step tolerates
+     * an absent object. Best-effort: close_session must always unwind, so
+     * this returns PAM_SUCCESS regardless (the 24h timeout remains the final
+     * backstop for the element, and the per-object deletes clear the chain,
+     * sets, and jump rule that have no timeout of their own).
+     */
+    pam_syslog(pamh, LOG_INFO,
+               "authnft: atomic cleanup for %s aborted (an object was already "
+               "gone) — falling back to per-object teardown", user);
+
+    if (sd->jump_handle) {
+        snprintf(cmd, sizeof(cmd),
+                 "delete rule inet %s filter handle %" PRIu64,
+                 TABLE_NAME, sd->jump_handle);
+        (void)nft_run_cmd_from_buffer(ctx, cmd);
+    }
+    snprintf(cmd, sizeof(cmd),
+             "flush chain inet %s %s\ndelete chain inet %s %s",
+             TABLE_NAME, sd->chain_name, TABLE_NAME, sd->chain_name);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+    snprintf(cmd, sizeof(cmd), "delete set inet %s %s", TABLE_NAME, sd->set_v4);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+    snprintf(cmd, sizeof(cmd), "delete set inet %s %s", TABLE_NAME, sd->set_v6);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+    snprintf(cmd, sizeof(cmd), "delete set inet %s %s", TABLE_NAME, sd->set_cg);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
 
     nft_ctx_free(ctx);
     return PAM_SUCCESS;
