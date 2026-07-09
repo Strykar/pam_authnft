@@ -1,0 +1,47 @@
+name: integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 2 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  container-integration:
+    # Tier 1 (docs/CI_LOCAL.md): the 25-stage integration suite and the
+    # fault-injection matrix run inside the booted-systemd container defined by
+    # Containerfile. A GitHub-hosted ubuntu-latest runner is a full VM with
+    # systemd as PID 1, so the container's transient-scope creation and the
+    # pamtester open/close lifecycle work here.
+    #
+    # The container shares the runner's kernel, so the `socket cgroupv2 level 2`
+    # packet-match (integration stage 10.11) is validated against the runner
+    # image's kernel, not a pinned matrix. The kernel matrix lives in
+    # audit-vm.yml.
+    #
+    # Cadence: workflow_dispatch + nightly, NOT pull_request yet. Booting
+    # systemd inside podman on the hosted image is the one step not proven green
+    # in CI. Once a few nightly runs pass, add `pull_request:` under `on:` to
+    # gate it per PR.
+    strategy:
+      fail-fast: false
+      matrix:
+        # test-integration-container: pamtester lifecycle, leftover-state,
+        #   rollback, session-file perms, real-sshd loopback.
+        # audit-container: the five nft_handler_setup returns under ASan/LSan
+        #   plus the valgrind lifecycle (catches the frag_buf leak class).
+        target: [test-integration-container, audit-container]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman
+      - name: Run ${{ matrix.target }} (booted-systemd container)
+        # If the systemd-init container fails to boot under rootless podman on
+        # the hosted image, switch this to `sudo make ${{ matrix.target }}`
+        # (rootful podman). This is the unproven step called out above.
+        run: make ${{ matrix.target }}

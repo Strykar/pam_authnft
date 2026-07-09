@@ -32,7 +32,8 @@ column lists the bug class or signal each tool produces.
 | **Differential oracle** | `tests/oracle/`, run via `make test` | every PR | logic bugs in 5 small parsers (C vs Python re-implementation diff) |
 | **Property-based tests** | `tests/oracle/properties.py` | every PR | idempotence + round-trip violations on the same 5 parsers |
 | **Unit suite** | `tests/test_suite.c`, run via `make test` | every PR | 14 stages (0-13): symbol whitelist, sanitization, sandbox kill/survive, nft dry-run, cgroup invariant, hardening flags, rhost normalization, peer lookup, keyring fetch, inode cap, session-file perms, setup-path syscall coverage |
-| **Integration suite** | `tests/integration_test.sh` | manual / container | pamtester open+close cycles, leftover-state assertions, per-session isolation, failure-path rollback, real-sshd loopback (privsep close boundary, kernel peer lookup) |
+| **Integration suite (tier 1)** | `.github/workflows/integration.yml` → `make test-integration-container` + `make audit-container` | nightly + dispatch | the 25-stage suite in the booted-systemd container: pamtester open+close cycles, leftover-state assertions, per-session isolation, failure-path rollback, real-sshd loopback, plus the nft_handler_setup fault matrix under ASan/LSan + valgrind lifecycle. Shares the runner kernel; the `socket cgroupv2 level 2` match is checked against that one kernel |
+| **Kernel-matrix audit (tier 2)** | `.github/workflows/audit-vm.yml` → `make audit-vm` (virtme-ng, `/dev/kvm`) | nightly + dispatch | unit + seccomp enforcement + the fault matrix under a real, pinnable kernel; the only tier that can sweep a kernel matrix. Part B (integration) is excluded here (headless coupling) |
 | **valgrind on unit suite** | `make test-integration` | manual | leaks, use-after-free, double-free |
 | **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps |
 | **fuzz-coverage measurement** | `make fuzz-coverage` → `docs/fuzz-coverage/` | manual / per-PR | per-function fuzz region/line/branch coverage; gates the ≥90% bar in `docs/FUZZ_SURFACE.md` |
@@ -115,6 +116,7 @@ get a formal write-up; internal audits are summarised in the relevant
 | When | Type | Scope | Outcome |
 |---|---|---|---|
 | 2026-04 (this audit) | Internal multi-phase | Phase 1 alloc paths, Phase 2 concurrency claims, Phase 3 trust model, Phase 4 differential + property + mutation testing, Phase 6.1 nightly fuzz, 6.5 audit hook | 4 real bugs found and fixed (3 heap OOBs + 1 off-by-one); harness coverage from 0 to 9 functions ≥ 90%; mutation testing wired in (mull, weekly cron); OSTIF best-practices alignment to mostly green |
+| 2026-07 | Internal pre-1.0 readiness | Full-tree adversarial audit (memory safety, trust boundary, sandbox, lifecycle, DoS, info-leak, logic) with per-finding reachability verification | No attacker-reachable memory-safety, injection, or sandbox-escape defect. Fixed: session-file `claims_tag` cross-user disclosure (now root:root); moved NSS group resolution to the unsandboxed parent (closes the sss/ldap SIGSYS lockout); per-session-state self-heal on PID-recycle EEXIST; best-effort `nft_handler_cleanup` (removed the false fallback comment); fragment validator now statement-aware (`;`/whitespace/brace bypass closed); peer lookup prefers the inbound listener socket. CI: added `sanitized-tests` (ASan+UBSan+LSan runtime, was build-only). Docs reconciled to shipped behavior |
 
 When external audits land, append a row.
 
