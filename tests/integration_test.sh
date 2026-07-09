@@ -245,8 +245,8 @@ for FIELD in '"v":2' '"cg_path":"authnft.slice/authnft-' "\"user\":\"$TEST_USER\
     fi
 done
 PERMS=$(stat -c '%a %U:%G' "$SESSION_FILE")
-if [[ "$PERMS" != "640 root:authnft" ]]; then
-    fail "Session file wrong permissions: got '$PERMS', expected '640 root:authnft'"
+if [[ "$PERMS" != "640 root:root" ]]; then
+    fail "Session file wrong permissions: got '$PERMS', expected '640 root:root' (root-only; claims_tag must not reach the authnft subject group)"
 fi
 rm -f "$SESSION_FILE"
 # Half 2: open+close in the SAME handle. close_session must remove the file.

@@ -382,17 +382,16 @@ static void run_session_file_perms_test(void) {
         fprintf(stderr, "[FAIL] owner uid %u != root\n", (unsigned)st.st_uid);
         ok = 0;
     }
-    struct group *g = getgrnam("authnft");
-    gid_t want = g ? g->gr_gid : 0;
-    if (st.st_gid != want) {
-        fprintf(stderr, "[FAIL] gid %u != expected %u (authnft %s)\n",
-                (unsigned)st.st_gid, (unsigned)want, g ? "present" : "absent");
+    /* Root-only: the file must stay root:root so claims_tag is not exposed
+     * to the authnft group, which is the monitored-subject population. */
+    if (st.st_gid != 0) {
+        fprintf(stderr, "[FAIL] gid %u != 0 (file must be root:root, not "
+                "group-readable by monitored subjects)\n", (unsigned)st.st_gid);
         ok = 0;
     }
     unlink(path);
     if (!ok) exit(1);
-    printf("[PASS] 0640 root:%s (authnft group %s)\n",
-           g ? "authnft" : "root", g ? "present" : "absent");
+    printf("[PASS] 0640 root:root (root-only)\n");
 }
 
 /* Stage 13: the setup path's libc operations must all survive the sandbox.
