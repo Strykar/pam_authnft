@@ -155,6 +155,64 @@ static void test_empty_and_comment_lines(void)
     EXPECT_EQ_INT(rc, 0);
 }
 
+/* nftables separates commands by ';' as well as newline; a bad verb or a
+ * shared-chain target hidden after a ';' must still be rejected. */
+static void test_semicolon_separated_bad_verb(void)
+{
+    const char *cases[] = {
+        "add table inet authnft; flush ruleset\n",
+        "add table inet authnft ; delete table inet authnft\n",
+        "add rule inet authnft @session_chain accept; include \"/etc/passwd\"\n",
+        "add rule inet authnft @session_chain accept; add rule inet authnft filter accept\n",
+        "flush ruleset {",          /* unbalanced brace must not hide the verb */
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        int rc = validate_fragment_buf(NULL, "test.nft",
+                                       cases[i], strlen(cases[i]));
+        if (rc != -1)
+            FAIL("';'-hidden case [%zu] '%s' not rejected", i, cases[i]);
+    }
+}
+
+/* Non-canonical whitespace between keywords must not evade the
+ * shared-chain guard (token-based match, not fixed-string memcmp). */
+static void test_shared_chain_whitespace(void)
+{
+    const char *cases[] = {
+        "add  rule inet authnft filter accept\n",
+        "add\trule\tinet\tauthnft\tfilter accept\n",
+        "  add rule   inet   authnft   filter drop\n",
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        int rc = validate_fragment_buf(NULL, "test.nft",
+                                       cases[i], strlen(cases[i]));
+        if (rc != -1)
+            FAIL("whitespace shared-chain case [%zu] '%s' not rejected",
+                 i, cases[i]);
+    }
+}
+
+/* Legitimate fragments must still pass: ';'-joined per-session rules, an
+ * anonymous set with '{ }', and a ';' inside a brace block (a chain-property
+ * separator, not a top-level command boundary). */
+static void test_legit_multi_statement_accepted(void)
+{
+    const char *cases[] = {
+        "add rule inet authnft @session_chain accept; "
+            "add rule inet authnft @session_chain drop\n",
+        "add rule inet authnft @session_chain tcp dport { 22, 80, 443 } accept\n",
+        "add rule inet authnft @session_chain ip saddr @session_v4 accept ; "
+            "add rule inet authnft @session_chain ip6 saddr @session_v6 accept\n",
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        int rc = validate_fragment_buf(NULL, "test.nft",
+                                       cases[i], strlen(cases[i]));
+        if (rc != 0)
+            FAIL("legit case [%zu] '%s' wrongly rejected (rc=%d)",
+                 i, cases[i], rc);
+    }
+}
+
 /* -------------------------------------------------------------------- */
 /* substitute_placeholders — ASan-coupled overflow tests                 */
 /* -------------------------------------------------------------------- */
@@ -322,6 +380,9 @@ int main(void)
     test_include_path_traversal();
     test_include_path_accepted();
     test_empty_and_comment_lines();
+    test_semicolon_separated_bad_verb();
+    test_shared_chain_whitespace();
+    test_legit_multi_statement_accepted();
 
     test_substitute_basic();
     test_substitute_token_boundary();
