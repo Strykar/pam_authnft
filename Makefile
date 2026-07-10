@@ -266,6 +266,23 @@ audit-container:
 audit-vm:
 	./ci/vng-audit.sh
 
+# Multi-kernel packet-match confidence run: tier-2 with the integration suite
+# (Part B) enabled across a kernel matrix. This is the one coverage CI cannot
+# gate — hosted runners cannot pin the kernel. It is EXPERIMENTAL and, as of
+# now, does not pass end to end:
+#   - non-host kernels download as Ubuntu .debs and need `dpkg` on the host to
+#     unpack (absent on Arch: `pacman -S dpkg`); without it only KERNELS=host
+#     boots.
+#   - Part B exits without output under the microVM's degraded --systemd init
+#     (see the comment in audit/run-all.sh); making the integration suite
+#     survive headless is follow-on work. Part A + Part C pass on every kernel.
+# Until Part B is de-coupled, single-kernel packet-match coverage comes from
+# `make test-integration-container` (full-systemd container, green). Override
+# the set with AUDIT_KERNELS="host v6.6 v6.1".
+AUDIT_KERNELS ?= host v6.12 v6.6
+audit-vm-matrix:
+	KERNELS="$(AUDIT_KERNELS)" AUDIT_RUN_INTEGRATION=1 ./ci/vng-audit.sh
+
 # `make audit` is the local gate: tier 1 (container) by default — the same
 # thing the pre-commit hook runs. `make audit-all` adds the tier-2 microVM.
 audit: audit-container
@@ -624,4 +641,5 @@ distclean: clean
 
 .PHONY: all debug clean fuzz fuzz-coverage reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-container \
         test-integration-container test-musl trace trace-container trace-features \
+        audit audit-all audit-container audit-vm audit-vm-matrix \
         distclean install install-tmpfiles uninstall man install-man
