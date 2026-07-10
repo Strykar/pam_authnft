@@ -117,14 +117,15 @@ static void nft_partial_cleanup(struct nft_ctx *ctx,
  * `user` is a member of the 'authnft' group, 0 otherwise (including when the
  * group or the user does not resolve).
  *
- * Runs in the UNSANDBOXED parent by design. NSS backends dlopen modules that
- * issue syscalls the seccomp allowlist does not cover — sssd/ldap open their
- * own sockets and nss_ldap can drive a TLS handshake — and the allowlist was
- * derived from a files-backend trace. Resolving membership inside the
- * sandboxed setup child would SIGSYS-kill a legitimate directory user's
- * session. NSS configuration is trusted admin data, not the fragment-parse
- * surface the sandbox exists to contain, so the resolution belongs in the
- * parent (see run_sandboxed_nft_setup in src/pam_entry.c).
+ * Runs in the setup child but BEFORE sandbox_apply. NSS backends dlopen
+ * modules that issue syscalls the seccomp allowlist does not cover — sssd/ldap
+ * open their own sockets and nss_ldap can drive a TLS handshake — and the
+ * allowlist was derived from a files-backend trace, so resolving membership
+ * after the filter is installed would SIGSYS-kill a legitimate directory
+ * user's session. Doing it unsandboxed avoids that; doing it in the child
+ * rather than the sshd monitor keeps NSS connection state out of the process
+ * that owns the transient scope, whose teardown it otherwise raced on a failed
+ * session (see run_sandboxed_nft_setup in src/pam_entry.c).
  */
 int nft_user_in_authnft_group(pam_handle_t *pamh, const char *user) {
     (void)pamh;

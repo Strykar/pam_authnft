@@ -102,6 +102,8 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
                                    int bypass) {
     if (bypass) {
         pam_syslog(pamh, LOG_DEBUG, "authnft: seccomp bypassed");
+        if (!nft_user_in_authnft_group(pamh, user))
+            return PAM_SUCCESS;
         authnft_reject_reason reason = AUTHNFT_REJECT_NONE;
         int rc = nft_handler_setup(pamh, user, session_pid, sd, &reason);
         emit_reject_message(pamh, user, reason);
@@ -132,7 +134,15 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
         /* The only process that ever carries the filter. nft_handler_setup's
          * kernel-side nft state persists after this child _exit()s. */
         close(pfd[0]);
-        if (sandbox_apply(pamh) < 0)
+        /* Resolve authnft group membership here, in the child but BEFORE the
+         * seccomp filter: NSS backends (sss, ldap, systemd) run unsandboxed so
+         * they cannot SIGSYS-kill the child, and any NSS connection state dies
+         * with this short-lived child instead of persisting in the sshd
+         * monitor, where it raced the transient-scope teardown on a failed
+         * session. A non-member is not managed by authnft — pass through. */
+        if (!nft_user_in_authnft_group(pamh, user))
+            res.rc = PAM_SUCCESS;
+        else if (sandbox_apply(pamh) < 0)
             pam_syslog(pamh, LOG_ERR, "authnft: failed to apply sandbox");
         else
             res.rc = nft_handler_setup(pamh, user, session_pid, sd, &res.reason);
@@ -199,18 +209,6 @@ PAM_EXTERN int pam_sm_open_session(pam_handle_t *pamh, int flags,
 
     if (strcmp(user, "root") == 0) {
         DEBUG_PRINT("PAM: root user, skipping");
-        return PAM_SUCCESS;
-    }
-
-    /* Resolve authnft group membership here, in the unsandboxed parent,
-     * before any scope/peer/keyring work and before the sandboxed fork.
-     * NSS backends (sss, ldap, systemd) can dlopen modules and issue
-     * syscalls outside the seccomp allowlist; doing the lookup here keeps a
-     * directory user's session from being SIGSYS-killed inside the setup
-     * child. A non-member is not managed by authnft — pass through with no
-     * scope, no rules, no session file. */
-    if (!nft_user_in_authnft_group(pamh, user)) {
-        DEBUG_PRINT("PAM: user %s not in 'authnft' group, passing through", user);
         return PAM_SUCCESS;
     }
 

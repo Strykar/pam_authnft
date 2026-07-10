@@ -91,10 +91,11 @@ typedef enum {
 /*
  * nft_user_in_authnft_group:
  * Resolves whether `user` is a member of the 'authnft' group via
- * getgrouplist(3) (full NSS). Returns 1 for a member, 0 otherwise. MUST be
- * called from the unsandboxed parent (pam_sm_open_session), never inside the
- * seccomp-sandboxed setup child: NSS backends (sss, ldap, systemd) can issue
- * syscalls outside the allowlist and would SIGSYS-kill the child.
+ * getgrouplist(3) (full NSS). Returns 1 for a member, 0 otherwise. Called in
+ * the setup child BEFORE sandbox_apply, so NSS backends (sss, ldap, systemd)
+ * run unsandboxed and cannot SIGSYS-kill the child; keeping it in the child
+ * rather than the parent also avoids leaving NSS connection state in the sshd
+ * monitor. Never call it after the seccomp filter is installed.
  */
 int nft_user_in_authnft_group(pam_handle_t *pamh, const char *user);
 
