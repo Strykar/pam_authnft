@@ -272,16 +272,26 @@ char *substitute_placeholders(const char *src, size_t src_len,
     for (size_t k = 0; k < 4; k++) {
         size_t plen = strlen(placeholders[k]);
         size_t rlen = strlen(replacements[k]);
+        /* LLVM_COV_EXCL_START: the harness passes the production placeholder
+         * strings, which are never empty, so this guard is unreachable under
+         * fuzzing. Honored by ci/fuzz-coverage-gate.py. */
         if (plen == 0) return NULL;
+        /* LLVM_COV_EXCL_STOP */
         if (rlen > max_rep_len) max_rep_len = rlen;
         if (plen < min_ph_len) min_ph_len = plen;
     }
     size_t ratio = (max_rep_len + min_ph_len - 1) / min_ph_len;
     if (ratio < 1) ratio = 1;
+    /* LLVM_COV_EXCL_START: overflow guard on src_len * ratio; a fuzz input
+     * cannot be SIZE_MAX-scale, so this is unreachable under fuzzing. */
     if (src_len > (SIZE_MAX - 1) / ratio) return NULL;
+    /* LLVM_COV_EXCL_STOP */
     size_t max_expand = src_len * ratio + 1;
     char *out = malloc(max_expand);
+    /* LLVM_COV_EXCL_START: allocation-failure guard; libFuzzer does not
+     * inject malloc failure (audit/malloc_fail.so covers it separately). */
     if (!out) return NULL;
+    /* LLVM_COV_EXCL_STOP */
 
     size_t wi = 0;
     int in_comment = 0;
