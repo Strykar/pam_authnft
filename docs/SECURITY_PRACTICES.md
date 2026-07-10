@@ -23,7 +23,7 @@ column lists the bug class or signal each tool produces.
 | **cppcheck** | `.github/workflows/cppcheck.yml` | every PR | static analysis: dangerous constructs, leaks, simple misuse |
 | **CodeQL** | `.github/workflows/codeql.yml` | every PR | static taint analysis, OWASP-style classes |
 | **Coverity Scan** | `.github/workflows/coverity.yml` | weekly cron | deeper static analysis (path-sensitive, inter-procedural) |
-| **AddressSanitizer + UBSan** | `.github/workflows/sanitizers.yml` | every PR | build-only validation that the .so links cleanly with sanitizers (test-run conflicts with seccomp) |
+| **AddressSanitizer + UBSan + LeakSanitizer** | `.github/workflows/sanitizers.yml` | every PR | `sanitizer-link` proves the .so links under each sanitizer; `sanitized-tests` runs the unit suite under ASan+UBSan+LSan in `AUTHNFT_AUDIT_MODE=1` (skips only the seccomp stages that conflict with the sanitizer runtime), giving real leak-checked execution of the sanitization, cgroup-path, rhost, netlink peer-parser, keyring, and inode-cap paths |
 | **OpenSSF Scorecard** | `.github/workflows/scorecard.yml` | weekly cron + push | supply-chain hygiene (pinned action versions, branch protection, signed releases, dangerous workflows) |
 | **OpenSSF Best Practices** | bestpractices.dev project 12496 | manual self-attest | governance / policy items the badge program tracks |
 | **CIFuzz** | `.github/workflows/cifuzz.yml` | every PR | 60 s × 8 fuzz harnesses (memory-safety regressions) |
@@ -31,12 +31,15 @@ column lists the bug class or signal each tool produces.
 | **Mutation testing (mull)** | `.github/workflows/mutation.yml` + `make mutation-report` | weekly Sunday 06:43 UTC | LLVM-IR mutations across `src/*.c` + `tests/test_suite.c`; surviving mutations indicate either coverage gaps or dead code |
 | **Differential oracle** | `tests/oracle/`, run via `make test` | every PR | logic bugs in 5 small parsers (C vs Python re-implementation diff) |
 | **Property-based tests** | `tests/oracle/properties.py` | every PR | idempotence + round-trip violations on the same 5 parsers |
-| **Unit suite** | `tests/test_suite.c`, run via `make test` | every PR | 10 stages: symbol whitelist, sanitization, sandbox kill/survive, cgroup invariant, hardening flags, peer lookup, keyring fetch |
-| **Integration suite** | `tests/integration_test.sh` | manual / container | pamtester open+close cycles, leftover-state assertions, per-session isolation, failure-path rollback |
+| **Unit suite** | `tests/test_suite.c`, run via `make test` | every PR | 14 stages (0-13): symbol whitelist, sanitization, sandbox kill/survive, nft dry-run, cgroup invariant, hardening flags, rhost normalization, peer lookup, keyring fetch, inode cap, session-file perms, setup-path syscall coverage |
+| **Integration suite (tier 1)** | `.github/workflows/integration.yml` → `make test-integration-container` + `make audit-container` | nightly + dispatch | the 25-stage suite in the booted-systemd container: pamtester open+close cycles, leftover-state assertions, per-session isolation, failure-path rollback, real-sshd loopback, plus the nft_handler_setup fault matrix under ASan/LSan + valgrind lifecycle. Shares the runner kernel; the `socket cgroupv2 level 2` match is checked against that one kernel |
+| **Kernel-matrix audit (tier 2)** | `.github/workflows/audit-vm.yml` → `make audit-vm` (virtme-ng, `/dev/kvm`) | nightly + dispatch | unit + seccomp enforcement + the fault matrix under a real, pinnable kernel; the only tier that can sweep a kernel matrix. Part B (integration) is excluded here (headless coupling) |
 | **valgrind on unit suite** | `make test-integration` | manual | leaks, use-after-free, double-free |
-| **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps |
+| **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps (github-actions ecosystem only; the C-library inventory is manual, see below) |
+| **Third-party drift gate** | `.github/workflows/third-party.yml` → `ci/thirdparty-check.sh` | every PR | asserts every `DT_NEEDED` library the .so links is inventoried in `docs/THIRD_PARTY.md`, so a new dependency cannot land without an entry (versions/CVE feeds stay manual) |
+| **SBOM** | `.github/workflows/sbom.yml` → `make sbom` (syft) | every release + dispatch | generates a CycloneDX SBOM of the shipped .so and attaches it to the release |
 | **fuzz-coverage measurement** | `make fuzz-coverage` → `docs/fuzz-coverage/` | manual / per-PR | per-function fuzz region/line/branch coverage; gates the ≥90% bar in `docs/FUZZ_SURFACE.md` |
-| **Reproducibility check** | `make reproducibility-check` | manual / per-release | bit-identical same-machine builds |
+| **Reproducibility check** | `.github/workflows/reproducibility.yml` → `make reproducibility-check` | every PR | builds pam_authnft.so twice from a clean tree and fails on a sha256 mismatch (bit-identical same-machine builds) |
 | **Trace-based seccomp provenance** | `make trace`, `make trace-features` | manual | confirms the seccomp allowlist matches actually-used syscalls |
 
 ## Security practices documents
@@ -53,7 +56,6 @@ Each artefact below has a single owner-doc. Don't duplicate; cross-link.
 | Build reproducibility expectations | [`docs/REPRODUCIBLE_BUILDS.md`](REPRODUCIBLE_BUILDS.md) |
 | Architecture / lifecycle / trust model | [`docs/ARCHITECTURE.txt`](ARCHITECTURE.txt) |
 | Stable producer/consumer contracts | [`docs/INTEGRATIONS.txt`](INTEGRATIONS.txt) |
-| Doc update matrix by change type | [`docs/DOC_CHECKLIST.txt`](DOC_CHECKLIST.txt) |
 | Build invariants + style + concurrency claims | [`docs/CONTRIBUTING.txt`](CONTRIBUTING.txt) |
 
 ## Security goals
@@ -116,6 +118,7 @@ get a formal write-up; internal audits are summarised in the relevant
 | When | Type | Scope | Outcome |
 |---|---|---|---|
 | 2026-04 (this audit) | Internal multi-phase | Phase 1 alloc paths, Phase 2 concurrency claims, Phase 3 trust model, Phase 4 differential + property + mutation testing, Phase 6.1 nightly fuzz, 6.5 audit hook | 4 real bugs found and fixed (3 heap OOBs + 1 off-by-one); harness coverage from 0 to 9 functions ≥ 90%; mutation testing wired in (mull, weekly cron); OSTIF best-practices alignment to mostly green |
+| 2026-07 | Internal pre-1.0 readiness | Full-tree adversarial audit (memory safety, trust boundary, sandbox, lifecycle, DoS, info-leak, logic) with per-finding reachability verification | No attacker-reachable memory-safety, injection, or sandbox-escape defect. Fixed: session-file `claims_tag` cross-user disclosure (now root:root); moved NSS group resolution out of the seccomp filter, into the setup child before `sandbox_apply` (closes the sss/ldap SIGSYS lockout without leaving NSS state in the sshd monitor); per-session-state self-heal on PID-recycle EEXIST; best-effort `nft_handler_cleanup` (removed the false fallback comment); fragment validator now statement-aware (`;`/whitespace/brace bypass closed); peer lookup prefers the inbound listener socket. CI: added `sanitized-tests` (ASan+UBSan+LSan runtime, was build-only). Docs reconciled to shipped behavior |
 
 When external audits land, append a row.
 

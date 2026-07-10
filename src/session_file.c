@@ -21,7 +21,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <grp.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -94,23 +93,24 @@ int session_file_write(pam_handle_t *pamh, const authnft_session_t *sd,
         return -1;
     }
 
-    /* 0640 root:authnft so the file is readable only by root and members
-     * of the authnft group. claims_tag may carry token-derived material
-     * (JTI, scope, session correlator) that is not derivable from /proc,
-     * last, or utmp; world-readable would leak it. Other fields (user,
-     * cg_path, remote_ip) are recoverable from the systemd scope and
-     * /proc and so are not the privacy delta — but the conservative
-     * default is to gate the whole record on authnft group membership.
+    /* Root-owned, root:root. The file carries claims_tag, which may hold
+     * token-derived material (JTI, scope, session correlator) that is not
+     * derivable from /proc, last, or utmp. An earlier version fchown'd the
+     * file to the authnft group to let non-root observers read it — but
+     * membership in the authnft group is exactly what nft_handler_setup
+     * gates a session on, so the group IS the monitored-subject population.
+     * Group-readable therefore let any managed user read every other
+     * managed user's claims, defeating the keyring UID-lock the module
+     * advertises (README "no filesystem footprint"). So the file stays
+     * root-only. A site that wants non-root observation should grant a
+     * dedicated observer group distinct from authnft; the group-read bit
+     * is retained (mode 0640) so that can be done with an fchown drop-in,
+     * but by default the group is root and the file is root-only.
      *
-     * If the authnft group does not exist (package preinst hasn't run,
-     * group was manually deleted, etc.) we still create the file with
-     * mode 0640 owned by root:root — readable only by root, which is
-     * stricter than the previous 0644 default. */
-    /* open(2) honours the process umask, so a permissive ambient umask
-     * could land 0600 even when 0640 was requested (and a malicious
-     * caller of pam(8) could not lower it, but a misconfigured service
-     * could). Open at 0600 (which is always strict enough) and widen
-     * to 0640 explicitly via fchmod(2), which ignores umask. */
+     * open(2) honours the process umask, so a permissive ambient umask
+     * could land 0600 even when 0640 was requested. Open at 0600 (always
+     * strict enough) and widen to 0640 explicitly via fchmod(2), which
+     * ignores umask. */
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) {
         if (pamh) pam_syslog(pamh, LOG_WARNING,
@@ -121,19 +121,6 @@ int session_file_write(pam_handle_t *pamh, const authnft_session_t *sd,
         pam_syslog(pamh, LOG_WARNING,
                    "authnft: session file fchmod(0640) failed on %s: %m "
                    "— leaving mode 0600 (root-only readable)", tmp);
-    }
-
-    struct group *grp = getgrnam("authnft");
-    if (grp) {
-        if (fchown(fd, 0 /* root */, grp->gr_gid) < 0 && pamh) {
-            pam_syslog(pamh, LOG_WARNING,
-                       "authnft: session file fchown(root:authnft) failed "
-                       "on %s: %m — leaving owner as root:root", tmp);
-        }
-    } else if (pamh) {
-        pam_syslog(pamh, LOG_DEBUG,
-                   "authnft: 'authnft' group not present — session file %s "
-                   "stays root:root mode 0640 (root-only readable)", tmp);
     }
 
     ssize_t w = write(fd, json, (size_t)n);

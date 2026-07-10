@@ -35,7 +35,8 @@
 int peer_parse_diag_chunk(const void *buf, size_t len,
                           const ino_t *inodes, int n_inodes,
                           char *out, size_t out_sz,
-                          char *pending, size_t pending_sz);
+                          char *pending, size_t pending_sz,
+                          const uint16_t *listen_ports, int n_listen);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (size < 8)
@@ -65,9 +66,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     char out[IP_STR_MAX] = {0};
     char pending[IP_STR_MAX] = {0};
 
+    /* Derive a listen-port set from two input bytes so both the disabled
+     * path (n_listen == 0) and the port-filter branch get exercised. The
+     * filter only narrows which sockets qualify; it cannot change the
+     * bounds or output-format invariants asserted below. */
+    uint16_t listen_ports[4];
+    int n_listen = data[2] % 5;      /* 0..4 */
+    for (int i = 0; i < n_listen; i++)
+        listen_ports[i] = (uint16_t)((data[(3 + i) % 8] << 8) | data[(4 + i) % 8]);
+
     int rc = peer_parse_diag_chunk(buf, len, inodes, n_inodes,
                                     out, out_sz,
-                                    pending, pending_sz);
+                                    pending, pending_sz,
+                                    n_listen ? listen_ports : NULL, n_listen);
 
     /* Property assertion: return code is one of the documented values. */
     if (rc != -1 && rc != 0 && rc != 1 && rc != 2)

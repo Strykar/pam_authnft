@@ -206,12 +206,21 @@ status legend applies to). HTML report under `docs/fuzz-coverage/`.
 | `util_is_valid_username` | 100.00% | 100.00% | 95.00% | ✅ |
 | `util_normalize_ip` | 93.02% | 96.15% | 91.30% | ✅ |
 | `validate_fragment_content` | 100.00% | 100.00% | 100.00% | ✅ |
-| `substitute_placeholders` | 96.83% | 100.00% | 97.92% | ✅ |
+| `substitute_placeholders` | 96.83% †| 100.00% | 97.92% | ✅ |
 | `peer_parse_diag_chunk` | 100.00% | 100.00% | 95.65% | ✅ |
 | `parse_socket_inode` | 100.00% | 100.00% | 100.00% | ✅ |
 | `keyring_sanitize` | 100.00% | 100.00% | 100.00% | ✅ |
 | `corr_sanitize_copy` | 100.00% | 100.00% | 100.00% | ✅ |
 | `validate_cgroup_path` | 95.45% | 100.00% | 100.00% | ✅ |
+
+† Stale, needs re-measure. The 2026-07 pre-ship `make fuzz-coverage` reports
+`substitute_placeholders` at **85.54% region** (deterministic corpus-only),
+not 96.83%, and below the 90% bar. The ~15% gap is the three
+`free(); return NULL;` overflow guards, which the corrected ratio bound
+makes effectively unreachable, so this will not cross 90% by fuzzing.
+Before the row can back a CI gate, either annotate those guards with
+`LLVM_COV_EXCL` (leaving reachable code at ~100%) or footnote the bar for
+this one function. Tracked with the deferred fuzz-coverage gate.
 
 Per-source-file region coverage (illustrating how much codebase is
 *untouched* by any harness):

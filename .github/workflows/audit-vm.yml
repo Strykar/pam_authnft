@@ -1,0 +1,59 @@
+name: audit-vm
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  microvm-audit:
+    # Tier 2 (docs/CI_LOCAL.md): audit/run-all.sh (unit + seccomp enforcement +
+    # the nft_handler_setup fault matrix, Parts A and C) under a real kernel in
+    # a virtme-ng microVM. This is the only tier that pins the kernel, so it is
+    # where kernel-version-specific nft/netfilter behaviour is caught. Runnable
+    # on hosted runners since January 2024 added /dev/kvm to ubuntu images.
+    #
+    # The integration suite (Part B) is intentionally NOT run here: it has
+    # host-environment coupling that does not survive headless execution in the
+    # microVM (see ci/vng-audit.sh and docs/CI_LOCAL.md). Tier 1
+    # (integration.yml) is where the lifecycle stages run green.
+    strategy:
+      fail-fast: false
+      matrix:
+        # Start with the runner's own kernel to prove the KVM + virtme-ng path.
+        # Expand to e.g. [host, v6.12, v6.6] once green; vng fetches the pinned
+        # kernels on demand (see the KERNELS matrix in ci/vng-audit.sh).
+        kernel: [host]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Grant access to /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm && echo "/dev/kvm present"
+      - name: Install virtme-ng, qemu, and the host build/test deps
+        # virtme-ng boots the guest on the HOST rootfs, so the toolchain and
+        # runtime tools (gcc, make, nft, pamtester, valgrind, the -dev libs)
+        # must be present on the runner itself, not only inside a container.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils busybox-static pipx \
+            build-essential pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev \
+            nftables pamtester valgrind
+          pipx install virtme-ng
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Make the host kernel readable to virtme-ng
+        # Hosted runners ship /boot/vmlinuz-* root-only, so `vng -r` (KERNELS=host)
+        # cannot read the running kernel. Grant read access to the boot files it
+        # needs. (Non-host kernels use vng's downloaded debs and are unaffected.)
+        run: sudo chmod -f +r /boot/vmlinuz-* /boot/config-* 2>/dev/null || true
+      - name: Tier-2 audit under kernel ${{ matrix.kernel }}
+        run: KERNELS="${{ matrix.kernel }}" ./ci/vng-audit.sh

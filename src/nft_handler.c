@@ -109,6 +109,47 @@ static void nft_partial_cleanup(struct nft_ctx *ctx,
     (void)nft_run_cmd_from_buffer(ctx, cmd);
 }
 
+/*
+ * Resolve authnft group membership via getgrouplist(3), which consults the
+ * full NSS stack (compat, files, sss, ldap, systemd, ...) and returns every
+ * group the user is in, including the primary — unlike a gr_mem walk, which
+ * is empty on sssd/ldap hosts with the default enumerate=false. Returns 1 if
+ * `user` is a member of the 'authnft' group, 0 otherwise (including when the
+ * group or the user does not resolve).
+ *
+ * Runs in the setup child but BEFORE sandbox_apply. NSS backends dlopen
+ * modules that issue syscalls the seccomp allowlist does not cover — sssd/ldap
+ * open their own sockets and nss_ldap can drive a TLS handshake — and the
+ * allowlist was derived from a files-backend trace, so resolving membership
+ * after the filter is installed would SIGSYS-kill a legitimate directory
+ * user's session. Doing it unsandboxed avoids that; doing it in the child
+ * rather than the sshd monitor keeps NSS connection state out of the process
+ * that owns the transient scope, whose teardown it otherwise raced on a failed
+ * session (see run_sandboxed_nft_setup in src/pam_entry.c).
+ */
+int nft_user_in_authnft_group(pam_handle_t *pamh, const char *user) {
+    (void)pamh;
+    struct group *grp = getgrnam("authnft");
+    if (!grp) return 0;
+    struct passwd *pw = getpwnam(user);
+    if (!pw) return 0;
+
+    int ngroups = 64;
+    gid_t groups[64];
+    int rc = getgrouplist(user, pw->pw_gid, groups, &ngroups);
+    if (rc >= 0)
+        return user_in_group(grp->gr_gid, groups, (size_t)ngroups) ? 1 : 0;
+
+    /* Buffer too small — user belongs to >64 groups. Allocate the size
+     * getgrouplist reported and retry once. */
+    gid_t *big = calloc((size_t)ngroups, sizeof(gid_t));
+    if (!big) return 0;
+    rc = getgrouplist(user, pw->pw_gid, big, &ngroups);
+    int in = (rc >= 0) && user_in_group(grp->gr_gid, big, (size_t)ngroups);
+    free(big);
+    return in;
+}
+
 int nft_handler_setup(pam_handle_t *pamh, const char *user,
                       int session_pid, authnft_session_t *sd,
                       authnft_reject_reason *reason) {
@@ -128,48 +169,10 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     DEBUG_PRINT("nft_handler_setup: user=%s cg=%s chain=%s",
                 user, sd->cg_path, sd->chain_name);
 
-    /* Group membership check via getgrouplist(3).
-     *
-     * Earlier code walked grp->gr_mem from getgrnam("authnft"). On hosts
-     * with SSSD or sssd-ldap and the (default) enumerate=false setting,
-     * gr_mem is empty even when the user is a legitimate member through
-     * directory memberOf. The user would silently fall through to
-     * "not in group, passing through" and never get the per-session
-     * firewall rules — a fail-safe but surprising failure mode.
-     *
-     * getgrouplist(3) consults the full NSS resolution (compat, files,
-     * sss, ldap, ...) and returns every group the user is in, including
-     * the primary. Match the authnft GID against that list. */
-    struct group *grp = getgrnam("authnft");
-    bool in_group = false;
-    if (grp) {
-        struct passwd *pw = getpwnam(user);
-        if (pw) {
-            int ngroups = 64;
-            gid_t groups[64];
-            int rc = getgrouplist(user, pw->pw_gid, groups, &ngroups);
-            if (rc < 0) {
-                /* Buffer too small — user belongs to >64 groups. Allocate
-                 * the size getgrouplist reported and retry once. */
-                gid_t *big = calloc((size_t)ngroups, sizeof(gid_t));
-                if (big) {
-                    rc = getgrouplist(user, pw->pw_gid, big, &ngroups);
-                    if (rc >= 0)
-                        in_group = user_in_group(grp->gr_gid, big,
-                                                 (size_t)ngroups);
-                    free(big);
-                }
-            } else {
-                in_group = user_in_group(grp->gr_gid, groups,
-                                         (size_t)ngroups);
-            }
-        }
-    }
-
-    if (!in_group) {
-        DEBUG_PRINT("user %s not in 'authnft' group, passing through", user);
-        return PAM_SUCCESS;
-    }
+    /* authnft group membership was resolved by the caller in the
+     * unsandboxed parent (nft_user_in_authnft_group, from
+     * pam_sm_open_session before the fork) so no NSS backend runs under
+     * the seccomp filter. A non-member never reaches this function. */
 
     /* Fragment validation: must exist, be root-owned, and not world-writable. */
     snprintf(user_conf_path, sizeof(user_conf_path), "%s/%s", RULES_DIR, user);
@@ -313,26 +316,45 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         /* "chain already exists" / "set already exists" on call 1 has a
          * specific operational cause: a previous session for the same
          * (user, pid) leaked its per-session state (privsep close-session
-         * leak, OOM-killed daemon, kernel panic, etc.) and the 24h
-         * element timeout has not yet evicted it. PIDs recycle on busy
-         * hosts within minutes; a user opening a new session that lands
-         * on the same PID hits this path. Surface it distinctly so an
-         * operator can recognize the symptom and clean up by hand
-         * (`nft delete chain inet authnft session_<user>_<pid>` and the
-         * matching sets). */
-        if (err_msg && (strstr(err_msg, "exists") || strstr(err_msg, "EEXIST"))) {
-            pam_syslog(pamh, LOG_ERR,
-                       "authnft: setup call 1 failed (per-session state for "
-                       "%s/%s already present — likely PID-recycle after a "
-                       "leaked session; check `nft list table inet authnft` "
-                       "for stale chain/sets): %s",
-                       user, sd->chain_name, err_msg);
+         * leak, OOM-killed daemon, kernel panic, etc.). The per-session
+         * chain, sets, and jump rule have no timeout of their own — only
+         * the element does — so the leak survives until the same PID
+         * recycles. PIDs recycle on busy hosts within minutes; a user
+         * opening a new session on the recycled PID lands on the stale
+         * names and, without recovery, is denied a session (fail-closed
+         * self-lockout). Self-heal: reap the stale (user, pid) state by
+         * name (recovers the old jump handle by listing the shared chain,
+         * same as nft_handler_cleanup_orphan), then retry call 1 once. */
+        /* Stale per-session state surfaces as "already exists" (EEXIST) or,
+         * when a leftover set is still referenced, "Device or resource busy"
+         * (EBUSY), depending on which object collides and the nft version.
+         * Match both. The recovery is scoped to this (user, pid) name and
+         * retried once, so a false match on an unrelated error costs only a
+         * no-op cleanup and a single retry that fails the same way. */
+        if (err_msg && (strstr(err_msg, "exists") || strstr(err_msg, "EEXIST") ||
+                        strstr(err_msg, "busy") || strstr(err_msg, "BUSY"))) {
+            pam_syslog(pamh, LOG_WARNING,
+                       "authnft: setup call 1 hit stale per-session state for "
+                       "%s/%s (likely PID-recycle after a leaked session) — "
+                       "reaping it and retrying",
+                       user, sd->chain_name);
+            (void)nft_handler_cleanup_orphan(pamh, user, sd);
+            if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
+                err_msg = nft_ctx_get_error_buffer(ctx);
+                pam_syslog(pamh, LOG_ERR,
+                           "authnft: setup call 1 still failing after reaping "
+                           "stale state for %s/%s: %s",
+                           user, sd->chain_name, err_msg);
+                free(frag_buf);
+                nft_ctx_free(ctx);
+                return PAM_SERVICE_ERR;
+            }
         } else {
             pam_syslog(pamh, LOG_ERR, "authnft: setup call 1 failed: %s", err_msg);
+            free(frag_buf);
+            nft_ctx_free(ctx);
+            return PAM_SERVICE_ERR;
         }
-        free(frag_buf);
-        nft_ctx_free(ctx);
-        return PAM_SERVICE_ERR;
     }
 
     /*
@@ -478,16 +500,11 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
     if (!ctx) return PAM_SESSION_ERR;
 
     /*
-     * Tear down per-session state in dependency order:
-     *   1. Delete the jump rule from the shared filter chain (by handle).
-     *   2. Flush the per-session chain (removes all rules, unblocking
-     *      set deletion).
-     *   3. Delete the per-session chain.
-     *   4. Delete the three per-session sets.
-     *
-     * A single transaction ensures atomicity. If any object was already
-     * reaped (timeout, manual cleanup), the transaction fails; we fall
-     * through to the best-effort path.
+     * Fast path: tear down the whole per-session state in one transaction,
+     * in dependency order — jump rule first (a chain cannot be deleted
+     * while a rule jumps to it), then flush+delete the chain (removing the
+     * fragment rules that reference the sets), then the three sets. This is
+     * the normal close, where every object still exists.
      */
     int n = snprintf(cmd, sizeof(cmd),
              "delete rule inet %s filter handle %" PRIu64 "\n"
@@ -509,13 +526,43 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
     }
 
     DEBUG_PRINT("cleanup:\n%s", cmd);
-    if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
-        const char *err_msg = nft_ctx_get_error_buffer(ctx);
-        pam_syslog(pamh, LOG_WARNING,
-                   "authnft: cleanup failed for %s: %s", user, err_msg);
+    if (nft_run_cmd_from_buffer(ctx, cmd) == 0) {
         nft_ctx_free(ctx);
-        return PAM_SESSION_ERR;
+        return PAM_SUCCESS;
     }
+
+    /*
+     * The atomic transaction aborted because one object was already gone —
+     * the 24h element timeout reaped it, a prior orphan reap ran, or an
+     * operator cleaned up by hand. nftables rolls the whole transaction
+     * back on the first failure, so the other five objects are still in the
+     * kernel. Delete each in its own transaction, same dependency order, so
+     * a single missing object cannot strand the rest. Every step tolerates
+     * an absent object. Best-effort: close_session must always unwind, so
+     * this returns PAM_SUCCESS regardless (the 24h timeout remains the final
+     * backstop for the element, and the per-object deletes clear the chain,
+     * sets, and jump rule that have no timeout of their own).
+     */
+    pam_syslog(pamh, LOG_INFO,
+               "authnft: atomic cleanup for %s aborted (an object was already "
+               "gone) — falling back to per-object teardown", user);
+
+    if (sd->jump_handle) {
+        snprintf(cmd, sizeof(cmd),
+                 "delete rule inet %s filter handle %" PRIu64,
+                 TABLE_NAME, sd->jump_handle);
+        (void)nft_run_cmd_from_buffer(ctx, cmd);
+    }
+    snprintf(cmd, sizeof(cmd),
+             "flush chain inet %s %s\ndelete chain inet %s %s",
+             TABLE_NAME, sd->chain_name, TABLE_NAME, sd->chain_name);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+    snprintf(cmd, sizeof(cmd), "delete set inet %s %s", TABLE_NAME, sd->set_v4);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+    snprintf(cmd, sizeof(cmd), "delete set inet %s %s", TABLE_NAME, sd->set_v6);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
+    snprintf(cmd, sizeof(cmd), "delete set inet %s %s", TABLE_NAME, sd->set_cg);
+    (void)nft_run_cmd_from_buffer(ctx, cmd);
 
     nft_ctx_free(ctx);
     return PAM_SUCCESS;

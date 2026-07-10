@@ -41,11 +41,19 @@ The module exports only **pam_sm_open_session** and
 **rhost_policy=kernel**
 :   Derive the peer IP from the session process's own ESTABLISHED TCP
     socket via **NETLINK_SOCK_DIAG** (see **ss**(8)), querying AF_INET6
-    first then AF_INET. The kernel-reported address is normalized
-    (including v4-mapped v6 extraction) and is authoritative — it cannot
-    be spoofed by a misconfigured or hostile PAM caller. If the kernel
-    lookup succeeds and the normalized value differs from a parseable
-    *PAM_RHOST*, the module logs a **LOG_WARNING** of the form
+    first then AF_INET. The address comes from the kernel, not from the
+    application, so a misconfigured or hostile PAM caller cannot forge it
+    through *PAM_RHOST*. When the session process holds more than one
+    ESTABLISHED TCP socket — for example an **nss_ldap** or krb5-over-TCP
+    connection still open from the authentication phase — the module
+    prefers the inbound server socket, the one whose local port is a
+    TCP listener on the host, over an outbound socket. If that
+    disambiguation cannot be made (listen-port enumeration denied), the
+    first non-loopback match is used, so on such hosts verify the bound
+    address matches the client. The kernel-reported address is normalized
+    (including v4-mapped v6 extraction). If the kernel lookup succeeds and
+    the normalized value differs from a parseable *PAM_RHOST*, the module
+    logs a **LOG_WARNING** of the form
     *"PAM_RHOST/kernel peer divergence: app='X' kernel='Y' — trusting
     kernel"*. If *PAM_RHOST* was set but unparseable and the kernel
     lookup succeeds, a **LOG_WARNING** is emitted noting the silent
@@ -56,13 +64,15 @@ The module exports only **pam_sm_open_session** and
     inode scan is capped at **INODES_CAP** (64); if the session PID
     holds more socket inodes, a **LOG_WARNING** is emitted and the
     lookup may miss the session's TCP socket.
-    **sshd privsep caveat:** on OpenSSH >= 9.x with the default
-    privsep configuration, the postauth PAM child may not hold the SSH
-    TCP socket's file descriptor in its */proc/\<pid\>/fd/* — the
-    socket is owned by the unprivileged sshd network process, not the
-    privileged monitor that runs PAM. The lookup will fall through to
-    **rhost_policy=lax** in this case. Test against your target
-    OpenSSH version before relying on this policy in production.
+    **sshd privsep note:** sshd runs **pam_open_session**(3) in its
+    privileged monitor process, and that process keeps the client TCP
+    socket open for the life of the connection, so the kernel lookup
+    is expected to succeed there. Verified against the OpenSSH 10.4
+    source, whose README.privsep documents the multi-binary privsep
+    model. On a server whose PAM caller does not hold the connection
+    socket, the lookup falls through to **rhost_policy=lax**. Test
+    against your target OpenSSH version before relying on this policy
+    in production.
 
 **claims_env=NAME**
 :   Look up PAM environment variable *NAME* for a kernel-keyring serial

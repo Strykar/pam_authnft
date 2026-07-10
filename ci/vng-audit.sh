@@ -54,9 +54,10 @@ for k in $KERNELS; do
     # kernel. The integration suite (Part B) is opt-in and disabled by
     # default: it has host-environment coupling that does not survive
     # headless execution in either audit substrate (see run-all.sh and
-    # docs/CI_LOCAL.md). Set AUDIT_RUN_INTEGRATION=1 to try it.
+    # docs/CI_LOCAL.md). Set AUDIT_RUN_INTEGRATION=1 to try it; the value is
+    # forwarded into the guest exec below so run-all.sh sees it.
     if vng "${runspec[@]}" --user root --systemd -p "$CPUS" -m "$MEM" \
-            --exec "cd '$REPO' && ./audit/run-all.sh"; then
+            --exec "cd '$REPO' && AUDIT_RUN_INTEGRATION=${AUDIT_RUN_INTEGRATION:-0} ./audit/run-all.sh"; then
         echo "=== kernel $k: PASS ==="
     else
         echo "=== kernel $k: FAIL ==="

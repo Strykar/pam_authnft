@@ -10,9 +10,10 @@ Near-term
     and README.md)
 [x] cppcheck workflow (.github/workflows/cppcheck.yml; `make` flags
     mirrored in contrib-style local invocation)
-[x] ASan / UBSan build target for CI (.github/workflows/sanitizers.yml;
-    build-only, not test-run, because the seccomp sandbox + fork-exec
-    scaffold tangles with ASan interceptors under CI)
+[x] ASan / UBSan build target for CI (.github/workflows/sanitizers.yml).
+    The `sanitizer-link` job is build-only; the `sanitized-tests` job now
+    also runs the unit suite under ASan+UBSan+LSan in AUTHNFT_AUDIT_MODE=1,
+    which skips only the seccomp stages that tangle with the interceptors.
 [x] GCC + Clang build matrix in CI (.github/workflows/build.yml)
 [x] Coverity Scan weekly cron (.github/workflows/coverity.yml)
 [x] OpenSSF Best Practices badge (project 12496) — added alongside the

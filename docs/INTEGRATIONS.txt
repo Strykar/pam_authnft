@@ -108,9 +108,13 @@ pam_authnft; sanitization and truncation are performed on read.
 
 2.2 Producer requirements
 
-    MUST use pam_putenv(3) to set the env variable. libc putenv(3) is
-    not carried across the sshd privsep fork by import_environments()
-    and will silently fail to reach pam_authnft on sshd stacks.
+    MUST use pam_putenv(3) to set the env variable. pam_authnft reads
+    it with pam_getenv(3), which sees only the PAM environment. libc
+    putenv(3) writes the process environment instead: sshd's
+    import_environments() replays pam_getenvlist(3) entries into the
+    PAM handle that runs the session stack, but process-environment
+    strings are exported to the user session only, so a putenv(3)
+    value silently fails to reach pam_authnft.
 
     MUST use the "user" key type. Other types (keyring, logon, big_key)
     are not supported.
@@ -477,7 +481,7 @@ and operator dashboards.
 
     Directory:  /run/authnft/sessions/    (0755 root:root)
     File:       /run/authnft/sessions/<scope_unit>.json
-    Perms:      0644 root:root
+    Perms:      0640 root:root (root-only; see §5.6.5)
     Atomicity:  tempfile + rename(2) — readers never see a partial
                 write. Intermediate name is .<scope_unit>.tmp.
     Lifecycle:  written after nft_handler_setup succeeds at open;
@@ -563,11 +567,27 @@ for session correctness. Common causes of write failure:
 
 5.6.5 Security note
 
-The file is world-readable by design: session metadata is not secret
-(cgroup membership is enumerable from /proc; PAM_USER is in `last`,
-`utmp`, and syslog). Restricting readability would not materially
-raise the bar and would prevent unprivileged monitoring agents from
-working without sudo.
+The file is root-only (0640 root:root). Most fields (cg_path, user,
+remote_ip, scope_unit) are not secret — cgroup membership is
+enumerable from /proc and PAM_USER is in `last`, `utmp`, and syslog.
+The exception is claims_tag, which may carry token-derived material
+(JTI, scope, session correlator) that is NOT derivable from /proc,
+`last`, or `utmp`. An earlier version made the file group-readable
+(0640 root:authnft) so unprivileged monitoring agents could read it,
+but membership in the authnft group is exactly what gates a session,
+so the group is the monitored-subject population — group-readable let
+any managed user read every other managed user's claims_tag. That
+contradicted the keyring UID-lock the module advertises (§2, README),
+so the file is now root-only.
+
+Non-root observation: a site that needs an unprivileged agent to read
+these files should create a dedicated observer group distinct from
+authnft and grant it via a drop-in that fchowns the files (the
+group-read bit is retained so no code change is needed). Do NOT reuse
+the authnft group for this. The claims_tag itself is also available
+root-only in the nftables element comment (`nft list table inet
+authnft`) and in the journal (AUTHNFT_CLAIMS_TAG), both privileged
+surfaces, so a root SIEM loses nothing from the file being root-only.
 
 Operators concerned about information exposure (e.g., claims_tag
 containing audit correlation tokens) MAY mount `/run/authnft` with

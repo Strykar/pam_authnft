@@ -1,0 +1,42 @@
+name: sbom
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    # Ship a CycloneDX SBOM with every release. Builds pam_authnft.so and runs
+    # `make sbom` (syft scan of the shipped .so), then attaches the result to
+    # the release. On workflow_dispatch it only generates the SBOM (no attach)
+    # so the job can be smoke-tested without a release.
+    permissions:
+      contents: write   # attach the SBOM asset to the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
+      - name: Install syft (pinned)
+        # Pinned to a released version. For stricter supply-chain hygiene,
+        # vendor the installer or pin it by commit.
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "$HOME/.local/bin" v1.46.0
+      - name: Build and generate the CycloneDX SBOM
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          make all
+          make sbom
+      - name: Attach the SBOM to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" pam_authnft.cdx.json --clobber

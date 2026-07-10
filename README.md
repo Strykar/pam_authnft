@@ -13,9 +13,14 @@
 Linux has no built-in way to bind packet filter rules to an authenticated
 user session and revoke them at logout. pam_authnft fills that gap. Rules
 are removed by `close_session` at logout via the per-session state stored
-through `pam_set_data`. A 24-hour element timeout is the safety net for
-cases where `close_session` never runs at all — daemon crash, OOM kill,
-kernel panic, hard reset.
+through `pam_set_data`. If `close_session` never runs at all — daemon
+crash, OOM kill, kernel panic, hard reset — two backstops apply: the
+session's set element carries a 24-hour timeout, so it stops matching
+traffic within a day; and the per-session chain, sets, and jump rule
+(which have no timeout of their own) are reaped either by the next
+`close_session` for that session or, if the PID recycles onto a leaked
+session's names, by the self-heal that reclaims the stale state at the
+next `open_session`.
 
 OpenBSD's pf has had this for years — named anchors loaded per-session via
 pfctl, torn down when the session ends. pam_authnft brings the same model
@@ -413,9 +418,12 @@ Why the keyring rather than a file or env var alone:
   the keyring (POSSESSOR check).
 - **No filesystem footprint.** Nothing to write, sync, or unlink. No
   race conditions, no leftover state on crash.
-- **Survives the sshd privsep fork.** Unlike shell env vars, kernel
-  keys remain readable across the auth-worker → session-worker
-  transition that happens inside sshd.
+- **Survives sshd's privilege separation.** sshd runs its whole PAM
+  stack in the privileged monitor process and in forks of it that
+  share the session keyring, so a key added during authentication is
+  still readable when pam_authnft runs at open_session. The sandboxed
+  pre-auth binary (sshd-auth, OpenSSH >= 10.0) never runs PAM and is
+  not on this path.
 
 ### PAM stack options
 
@@ -567,7 +575,7 @@ make trace-container             # seccomp allowlist trace
 make test-musl                   # unit suite built against musl (Alpine)
 ```
 
-For the unit + integration stage matrix (stages 0–13 and 10.1–10.24)
+For the unit + integration stage matrix (stages 0–13 and 10.1–10.25)
 and the CI gate inventory, see
 [docs/CONTRIBUTING.txt](docs/CONTRIBUTING.txt) § Tests.
 
@@ -645,7 +653,6 @@ Advisories](https://github.com/identd-ng/pam_authnft/security/advisories)
 | [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) | Stable contracts for producers and consumers: PAM stack (§1), claims_env keyring (§2), nft fragment composition (§4.6), systemd scopes (§5), session JSON (§5.6), structured journal events (§6.2), Linux audit-syscall events (§6.2.7) |
 | [docs/CONTRIBUTING.txt](docs/CONTRIBUTING.txt) | Build, layout, invariants, style, test procedures, seccomp allowlist derivation |
 | [docs/TODO.txt](docs/TODO.txt) | Near-term, medium-term, and deferred work items |
-| [docs/DOC_CHECKLIST.txt](docs/DOC_CHECKLIST.txt) | Documentation update matrix by change type |
 | [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) | Authoritative dependency inventory: licenses, version floors, security feeds |
 | [docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md) | Internal runbook for handling a security report (the public policy is [SECURITY.md](SECURITY.md)) |
 | [docs/SECURITY_PRACTICES.md](docs/SECURITY_PRACTICES.md) | Single-page overview of every security tool, doc, goal, and milestone in the project |

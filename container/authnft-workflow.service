@@ -1,0 +1,15 @@
+[Unit]
+Description=pam_authnft test workflow runner
+After=basic.target
+Wants=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/bin/run-workflow
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

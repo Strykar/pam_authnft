@@ -30,135 +30,214 @@ const char *const nft_validator_bad_verbs[] = {
 const size_t nft_validator_bad_verbs_count =
     sizeof(nft_validator_bad_verbs) / sizeof(nft_validator_bad_verbs[0]);
 
+/* Whitespace inside a fragment statement. Newline and CR count too, so a
+ * multi-line "{ ... }" block tokenizes as one statement. */
+static int is_frag_ws(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+/* Copy the next whitespace-delimited token from [*pp, end) into tok
+ * (NUL-terminated, truncated to cap). A token that opens with '"' runs to
+ * the matching close quote so a quoted include path with embedded spaces
+ * stays one token. Advances *pp past the token. Returns the token's true
+ * length (which may exceed cap-1 if truncated), or 0 if none remain. */
+static size_t next_token(const char **pp, const char *end,
+                         char *tok, size_t cap)
+{
+    const char *p = *pp;
+    while (p < end && is_frag_ws(*p)) p++;
+    if (p >= end) { if (cap) tok[0] = '\0'; *pp = p; return 0; }
+
+    const char *ts = p;
+    if (*p == '"') {
+        p++;                                  /* opening quote */
+        while (p < end && *p != '"') p++;
+        if (p < end) p++;                     /* closing quote */
+    } else {
+        while (p < end && !is_frag_ws(*p)) p++;
+    }
+    size_t len = (size_t)(p - ts);
+    *pp = p;
+
+    size_t n = (cap && len < cap - 1) ? len : (cap ? cap - 1 : 0);
+    if (cap) { memcpy(tok, ts, n); tok[n] = '\0'; }
+    return len;
+}
+
+/* Validate one nftables statement [s, e). Rejects (returns -1):
+ *   - a disallowed leading verb from nft_validator_bad_verbs[]
+ *   - "add rule inet authnft filter ..." (the shared chain; fragments must
+ *     target the per-session chain via @session_chain)
+ *   - an include path that is relative, outside /etc/authnft/, or carries a
+ *     '..' segment or a glob character
+ * Matching is token-based, so extra or non-canonical whitespace between
+ * keywords does not evade the shared-chain guard. Returns 0 on accept. */
+static int check_statement(pam_handle_t *pamh, const char *path, int lineno,
+                           const char *s, const char *e)
+{
+    const char *p = s;
+    char t0[32];
+    if (next_token(&p, e, t0, sizeof(t0)) == 0)
+        return 0;  /* whitespace/comment-only statement */
+
+    for (size_t i = 0; i < nft_validator_bad_verbs_count; i++) {
+        if (strcmp(t0, nft_validator_bad_verbs[i]) == 0) {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: fragment %s:%d uses disallowed verb '%s'",
+                       path, lineno, nft_validator_bad_verbs[i]);
+            return -1;
+        }
+    }
+
+    /* Shared-chain guard: reject "add rule inet authnft filter ...". Rules a
+     * fragment installs there persist across sessions and affect every other
+     * session; per-session rules must go through @session_chain. */
+    if (strcmp(t0, "add") == 0) {
+        static const char *const shared[5] =
+            { "add", "rule", "inet", TABLE_NAME, "filter" };
+        const char *q = s;
+        char tk[64];
+        int match = 1;
+        for (int k = 0; k < 5; k++) {
+            if (next_token(&q, e, tk, sizeof(tk)) == 0 ||
+                strcmp(tk, shared[k]) != 0) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: fragment %s:%d targets shared 'filter' chain; "
+                       "fragments must target the per-session chain via the "
+                       "@session_chain placeholder", path, lineno);
+            return -1;
+        }
+    }
+
+    /* include path validation: absolute, under /etc/authnft/, no '..', no
+     * glob characters. */
+    if (strcmp(t0, "include") == 0) {
+        char raw[512];
+        size_t rl = next_token(&p, e, raw, sizeof(raw));
+        if (rl == 0 || rl >= sizeof(raw)) {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: fragment %s:%d has a missing or over-long "
+                       "include path", path, lineno);
+            return -1;
+        }
+        char *ps = raw;
+        size_t plen = strlen(ps);
+        if (plen && ps[0] == '"') {          /* strip surrounding quotes */
+            ps++; plen--;
+            if (plen && ps[plen - 1] == '"') { ps[plen - 1] = '\0'; plen--; }
+        }
+        if (plen == 0 || ps[0] != '/') {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: fragment %s:%d uses relative include path",
+                       path, lineno);
+            return -1;
+        }
+        if (plen < 13 || memcmp(ps, "/etc/authnft/", 13) != 0) {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: fragment %s:%d includes path outside "
+                       "/etc/authnft/", path, lineno);
+            return -1;
+        }
+        for (size_t g = 0; g + 1 < plen; g++) {
+            if (ps[g] == '.' && ps[g + 1] == '.' &&
+                (g == 0 || ps[g - 1] == '/') &&
+                (g + 2 >= plen || ps[g + 2] == '/')) {
+                pam_syslog(pamh, LOG_ERR,
+                           "authnft: fragment %s:%d include path contains "
+                           "'..' segment", path, lineno);
+                return -1;
+            }
+        }
+        for (size_t g = 0; g < plen; g++) {
+            if (ps[g] == '*' || ps[g] == '?' || ps[g] == '[') {
+                pam_syslog(pamh, LOG_ERR,
+                           "authnft: fragment %s:%d include path contains "
+                           "glob character '%c'", path, lineno, ps[g]);
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 /*
- * Fragment content validation against a pre-read buffer. Walks the
- * buffer by '\n' to avoid buffer-boundary verb truncation, then rejects:
- *   - Disallowed verbs from nft_validator_bad_verbs[]
- *   - 'add rule inet authnft filter ...' targeting the shared filter
- *     chain; fragments must target the per-session chain via
- *     @session_chain
- *   - include paths outside /etc/authnft/, relative paths, '..'
- *     segments, glob characters
+ * Fragment content validation against a pre-read buffer.
+ *
+ * nftables separates commands by BOTH newline and ';', so a first-token
+ * scan of each '\n'-delimited line misses a disallowed verb hidden after a
+ * ';' ("add table x; flush ruleset"). This walks the buffer as a stream of
+ * statements split on ';' or '\n' at brace-depth 0, tracking "..." quotes
+ * and '#' comments so a separator inside either is not a split point, then
+ * checks each statement's leading verb, shared-chain target, and include
+ * path (see check_statement). Token-based matching also defeats
+ * non-canonical whitespace ("add  rule inet authnft filter").
  *
  * Trust model: fragments are admin-authored (root-owned, not
  * world-writable; checked by stat(2) earlier). This validator is
- * defense-in-depth and a typo-catcher; it is NOT a sandbox for
- * untrusted input. See docs/INTEGRATIONS.txt §4.
+ * defense-in-depth and a typo-catcher; it is NOT a sandbox for untrusted
+ * input. See docs/INTEGRATIONS.txt §4.
  */
 int validate_fragment_buf(pam_handle_t *pamh, const char *path,
                           const char *buf, size_t buf_len)
 {
-    static const char shared_chain_prefix[] =
-        "add rule inet " TABLE_NAME " filter";
-    static const size_t shared_chain_prefix_len =
-        sizeof(shared_chain_prefix) - 1;
-
-    int rc = 0;
-    int lineno = 1;
-    const char *p = buf;
     const char *end = buf + buf_len;
+    const char *stmt = buf;      /* start of the current statement */
+    int lineno = 1;
+    int stmt_lineno = 1;         /* line the current statement started on */
+    int in_quote = 0, in_comment = 0, depth = 0, has_content = 0;
 
-    while (p < end) {
-        const char *line_end = memchr(p, '\n', (size_t)(end - p));
-        if (!line_end) line_end = end;
-        size_t line_len = (size_t)(line_end - p);
+    for (const char *p = buf; p < end; p++) {
+        char c = *p;
+        int is_sep = 0;
 
-        /* Skip leading whitespace */
-        const char *t = p;
-        while (t < line_end && (*t == ' ' || *t == '\t')) t++;
-        size_t tlen = (size_t)(line_end - t);
-
-        /* Skip empty lines and comments */
-        if (tlen == 0 || *t == '#') goto next;
-
-        /* Disallowed-verb check. Verb match requires a word boundary
-         * (space/tab/end-of-line) so 'flushy' wouldn't trip 'flush'. */
-        for (size_t i = 0; i < nft_validator_bad_verbs_count; i++) {
-            size_t vlen = strlen(nft_validator_bad_verbs[i]);
-            if (tlen >= vlen &&
-                memcmp(t, nft_validator_bad_verbs[i], vlen) == 0 &&
-                (tlen == vlen || t[vlen] == ' ' || t[vlen] == '\t')) {
-                pam_syslog(pamh, LOG_ERR,
-                           "authnft: fragment %s:%d uses disallowed verb '%s'",
-                           path, lineno, nft_validator_bad_verbs[i]);
-                rc = -1;
-                goto out;
-            }
+        if (in_comment) {
+            if (c == '\n') { in_comment = 0; is_sep = (depth == 0); }
+        } else if (in_quote) {
+            /* nftables has no multi-line string literals; a newline closes
+             * an unterminated quote and separates the statement. */
+            if (c == '"') in_quote = 0;
+            else if (c == '\n') { in_quote = 0; is_sep = (depth == 0); }
+        } else if (c == '#') {
+            in_comment = 1;
+        } else if (c == '"') {
+            in_quote = 1; has_content = 1;
+        } else if (c == '{') {
+            depth++; has_content = 1;
+        } else if (c == '}') {
+            if (depth > 0) depth--;
+            has_content = 1;
+        } else if ((c == ';' || c == '\n') && depth == 0) {
+            is_sep = 1;
+        } else if (!is_frag_ws(c)) {
+            has_content = 1;
         }
 
-        /* Reject 'add rule inet authnft filter ...' — fragments must
-         * target the per-session chain via @session_chain. The shared
-         * filter chain is owned by pam_authnft; any rule a fragment
-         * installs there persists across sessions and affects every
-         * other session. */
-        if (tlen >= shared_chain_prefix_len &&
-            memcmp(t, shared_chain_prefix, shared_chain_prefix_len) == 0 &&
-            (tlen == shared_chain_prefix_len ||
-             t[shared_chain_prefix_len] == ' ' ||
-             t[shared_chain_prefix_len] == '\t')) {
-            pam_syslog(pamh, LOG_ERR,
-                       "authnft: fragment %s:%d targets shared 'filter' chain; "
-                       "fragments must target the per-session chain via "
-                       "the @session_chain placeholder", path, lineno);
-            rc = -1;
-            goto out;
+        if (is_sep) {
+            if (has_content &&
+                check_statement(pamh, path, stmt_lineno, stmt, p) < 0)
+                return -1;
+            stmt = p + 1;
+            has_content = 0;
+            stmt_lineno = lineno + (c == '\n' ? 1 : 0);
         }
-
-        /* include path validation: absolute, under /etc/authnft/, no
-         * '..', no glob characters. */
-        if (tlen >= 8 && memcmp(t, "include", 7) == 0 &&
-            (t[7] == ' ' || t[7] == '\t' || t[7] == '"')) {
-            const char *q = t + 7;
-            while (q < line_end && (*q == ' ' || *q == '\t')) q++;
-            if (q < line_end && *q == '"') q++;
-
-            if (q >= line_end || *q != '/') {
-                pam_syslog(pamh, LOG_ERR,
-                           "authnft: fragment %s:%d uses relative include path",
-                           path, lineno);
-                rc = -1;
-                goto out;
-            }
-            if ((size_t)(line_end - q) < 13 ||
-                memcmp(q, "/etc/authnft/", 13) != 0) {
-                pam_syslog(pamh, LOG_ERR,
-                           "authnft: fragment %s:%d includes path outside "
-                           "/etc/authnft/", path, lineno);
-                rc = -1;
-                goto out;
-            }
-            /* Reject '..' segments anywhere in the path. A literal '..'
-             * preceded by '/' or path start, followed by '/' or path
-             * end, escapes the /etc/authnft/ prefix check. */
-            for (const char *g = q; g < line_end && *g != '"'; g++) {
-                if (*g == '.' && g + 1 < line_end && g[1] == '.' &&
-                    (g == q || g[-1] == '/') &&
-                    (g + 2 >= line_end || g[2] == '/' ||
-                     g[2] == '"' || g[2] == ' ' || g[2] == '\t')) {
-                    pam_syslog(pamh, LOG_ERR,
-                               "authnft: fragment %s:%d include path "
-                               "contains '..' segment", path, lineno);
-                    rc = -1;
-                    goto out;
-                }
-                if (*g == '*' || *g == '?' || *g == '[') {
-                    pam_syslog(pamh, LOG_ERR,
-                               "authnft: fragment %s:%d include path contains "
-                               "glob character '%c'", path, lineno, *g);
-                    rc = -1;
-                    goto out;
-                }
-            }
-        }
-
-next:
-        p = line_end + (line_end < end ? 1 : 0);
-        lineno++;
-        (void)line_len;
+        if (c == '\n') lineno++;
     }
 
-out:
-    return rc;
+    /* Final statement: no trailing separator, or an unbalanced '{' that
+     * never closed. Check it regardless of depth so a trailing bad verb
+     * cannot hide behind a missing '}'. */
+    if (!in_comment && has_content &&
+        check_statement(pamh, path, stmt_lineno, stmt, end) < 0)
+        return -1;
+
+    return 0;
 }
 
 /*
