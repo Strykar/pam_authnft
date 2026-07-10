@@ -307,9 +307,14 @@ is a documented kernel or userspace primitive.
 
 ### Requirements
 
-- Linux kernel >= 5.10, cgroupv2 unified hierarchy
+- Linux kernel >= 5.18, cgroupv2 unified hierarchy. The `socket cgroupv2`
+  expression was added in 5.13 but did not match on INPUT-hooked chains
+  (which this module uses) until 5.18 (commit 05ae2fba821c, "netfilter:
+  nft_socket: make cgroup match work in input too"). Older distro kernels
+  with that fix backported also work — RHEL 9's 5.14-based kernel likely
+  qualifies; verify on the target host with `make test-packet-match`.
 - systemd with D-Bus
-- nftables >= 1.0.6 (`socket cgroupv2` expression requires kernel >= 4.10)
+- nftables >= 1.0.6
 - Build: `gcc`, `make`, `pkg-config`
 - Libraries: `libnftables`, `libseccomp`, `libsystemd`, `libcap`, `libaudit`, `pam`
 

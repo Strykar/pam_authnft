@@ -27,11 +27,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # host proves the KVM + virtme-ng path; v6.12 and v6.6 pin older
-        # kernels that vng fetches on demand as .debs (the Ubuntu runner has
-        # dpkg to unpack them), sweeping the packet-match invariants across
-        # kernel versions.
-        kernel: [host, v6.12, v6.6]
+        # Deployment-rationale matrix. vng fetches Ubuntu MAINLINE builds
+        # (vanilla kernels by tag), so distro kernels are approximated by
+        # the vanilla kernel at each distro's base version:
+        #   host   - the runner's Ubuntu cloud kernel; proves the KVM path
+        #   v6.8   - Ubuntu 24.04 LTS GA base
+        #   v5.18  - oldest mainline where socket-cgroupv2 matches on the
+        #            INPUT hook (05ae2fba821c). Vanilla 5.14 (RHEL 9 base)
+        #            predates it and fails packet-match, so the RHEL 9
+        #            floor is representable only by its backports; this
+        #            leg pins the true upstream floor instead.
+        #   v6.12  - RHEL 10 base, also upstream LTS
+        #   latest - newest tagged mainline build, tracking Linus's tree
+        #            (resolved at run time by ci/vng-audit.sh)
+        kernel: [host, v6.8, v5.18, v6.12, latest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
