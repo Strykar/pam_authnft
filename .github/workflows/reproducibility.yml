@@ -1,0 +1,29 @@
+name: reproducibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  reproducible-build:
+    # Security goal #7: same-machine reproducible builds. Builds pam_authnft.so
+    # twice from a clean tree and compares the sha256; `make
+    # reproducibility-check` exits non-zero on a mismatch. The build embeds no
+    # timestamps or random seeds, so this is deterministic on a fixed
+    # toolchain. If the hosted runner's toolchain ever proves non-reproducible,
+    # pin SOURCE_DATE_EPOCH or the compiler version here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
+      - name: Reproducible same-machine build
+        run: make reproducibility-check

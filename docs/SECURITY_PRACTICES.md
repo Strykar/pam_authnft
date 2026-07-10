@@ -37,7 +37,7 @@ column lists the bug class or signal each tool produces.
 | **valgrind on unit suite** | `make test-integration` | manual | leaks, use-after-free, double-free |
 | **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps |
 | **fuzz-coverage measurement** | `make fuzz-coverage` → `docs/fuzz-coverage/` | manual / per-PR | per-function fuzz region/line/branch coverage; gates the ≥90% bar in `docs/FUZZ_SURFACE.md` |
-| **Reproducibility check** | `make reproducibility-check` | manual / per-release | bit-identical same-machine builds |
+| **Reproducibility check** | `.github/workflows/reproducibility.yml` → `make reproducibility-check` | every PR | builds pam_authnft.so twice from a clean tree and fails on a sha256 mismatch (bit-identical same-machine builds) |
 | **Trace-based seccomp provenance** | `make trace`, `make trace-features` | manual | confirms the seccomp allowlist matches actually-used syscalls |
 
 ## Security practices documents
