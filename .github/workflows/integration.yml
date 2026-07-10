@@ -22,10 +22,10 @@ jobs:
     # image's kernel, not a pinned matrix. The kernel matrix lives in
     # audit-vm.yml.
     #
-    # Cadence: workflow_dispatch + nightly, NOT pull_request yet. Booting
-    # systemd inside podman on the hosted image is the one step not proven green
-    # in CI. Once a few nightly runs pass, add `pull_request:` under `on:` to
-    # gate it per PR.
+    # Cadence: per PR (plus dispatch + nightly). The systemd-in-podman boot was
+    # proven green on a hosted runner before promoting this to a PR gate; that
+    # run also surfaced and fixed the runner's lack of Containerfile-heredoc
+    # support (scripts moved to container/ and COPY'd).
     strategy:
       fail-fast: false
       matrix:
