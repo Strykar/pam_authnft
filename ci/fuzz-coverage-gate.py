@@ -35,11 +35,12 @@ def excl_ranges():
     out = {}
     for f in glob.glob("src/*.c"):
         ranges, start = [], None
-        for i, line in enumerate(open(f), 1):
-            if "LLVM_COV_EXCL_START" in line:
-                start = i
-            elif "LLVM_COV_EXCL_STOP" in line and start is not None:
-                ranges.append((start, i)); start = None
+        with open(f, encoding="utf-8") as fp:
+            for i, line in enumerate(fp, 1):
+                if "LLVM_COV_EXCL_START" in line:
+                    start = i
+                elif "LLVM_COV_EXCL_STOP" in line and start is not None:
+                    ranges.append((start, i)); start = None
         if ranges:
             out[os.path.abspath(f)] = ranges
     return out
