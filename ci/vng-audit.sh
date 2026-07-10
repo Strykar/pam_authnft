@@ -29,9 +29,12 @@
 # are all present.
 #
 # Kernel matrix:
-#   KERNELS="host"            # default: boot the host's running kernel
-#   KERNELS="host v6.12 v6.6" # also boot precompiled upstream kernels
-#                             # (virtme-ng downloads them on demand)
+#   KERNELS="host"             # default: boot the host's running kernel
+#   KERNELS="host v6.8 latest" # also boot precompiled upstream kernels
+#                              # (virtme-ng downloads Ubuntu mainline
+#                              # builds on demand; needs dpkg on the host)
+# The special name "latest" resolves to the newest tagged mainline build
+# with an amd64 image, tracking Linus's tree at tag granularity.
 #
 # Tunables: VNG_CPUS (default 4), VNG_MEM (default 4G).
 set -uo pipefail
@@ -46,8 +49,37 @@ MEM="${VNG_MEM:-4G}"
 command -v vng >/dev/null || { echo "virtme-ng (vng) not installed" >&2; exit 1; }
 test -e /dev/kvm || echo "WARNING: /dev/kvm absent — vng will be slow (TCG)" >&2
 
+# Resolve the "latest" pseudo-kernel to the newest tagged mainline build
+# that actually published an amd64 image (rc builds occasionally fail to
+# build; step back through the newest tags until one has binaries).
+# `-rc` tags are mapped to `~rc` for the version sort so a final release
+# outranks its own release candidates.
+resolve_latest() {
+    local tags t
+    tags=$(curl -fsSL https://kernel.ubuntu.com/mainline/ \
+        | grep -oP 'href="v[0-9][^"/]*/"' | grep -oP 'v[0-9][^"/]*' \
+        | sed 's/-rc/~rc/' | sort -uV | sed 's/~rc/-rc/' | tail -5 | tac)
+    [ -n "$tags" ] || return 1
+    for t in $tags; do
+        if curl -fsSL "https://kernel.ubuntu.com/mainline/$t/" 2>/dev/null \
+                | grep -q 'amd64.*linux-image'; then
+            echo "$t"
+            return 0
+        fi
+    done
+    return 1
+}
+
 overall=0
 for k in $KERNELS; do
+    if [ "$k" = latest ]; then
+        if ! k=$(resolve_latest); then
+            echo "=== kernel latest: FAIL (could not resolve a mainline build) ==="
+            overall=1
+            continue
+        fi
+        echo "(latest resolved to mainline $k)"
+    fi
     echo "=================================================================="
     echo "=== tier-2 under kernel: $k ==="
     echo "=================================================================="

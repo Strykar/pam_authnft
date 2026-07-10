@@ -281,10 +281,13 @@ audit-vm:
 #   - non-host kernels download as Ubuntu .debs and need `dpkg` on the host
 #     to unpack (absent on Arch: `pacman -S dpkg`); without it only
 #     KERNELS=host boots.
-# Override the set with AUDIT_KERNELS="host v6.6 v6.1". AUDIT_RUN_INTEGRATION
-# is left off: packet-match now comes from the headless harness, and Part B
-# still does not survive the microVM's degraded --systemd init.
-AUDIT_KERNELS ?= host v6.12 v6.6
+# Default set mirrors audit-vm.yml's deployment rationale: Ubuntu 24.04 LTS
+# base (v6.8), RHEL 9 base (v5.14), RHEL 10 base / upstream LTS (v6.12), and
+# "latest" (newest tagged mainline, resolved by ci/vng-audit.sh). Override
+# with AUDIT_KERNELS="host v6.1 ...". AUDIT_RUN_INTEGRATION is left off:
+# packet-match comes from the headless harness, and Part B still does not
+# survive the microVM's degraded --systemd init.
+AUDIT_KERNELS ?= host v6.8 v5.14 v6.12 latest
 audit-vm-matrix:
 	KERNELS="$(AUDIT_KERNELS)" ./ci/vng-audit.sh
 
