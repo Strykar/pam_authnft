@@ -1,0 +1,29 @@
+name: third-party
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linked-lib-inventory:
+    # Dependabot covers only the github-actions ecosystem. The C libraries the
+    # .so links against are inventoried by hand in docs/THIRD_PARTY.md. This
+    # asserts the one mechanical invariant: every DT_NEEDED library the shipped
+    # .so links has an entry in the doc, so a new dependency cannot slip in
+    # without being inventoried. Version floors and CVE feeds stay a manual
+    # review (they are curated, not derivable).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config binutils \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
+      - name: Assert every linked library is inventoried in THIRD_PARTY.md
+        run: ./ci/thirdparty-check.sh
