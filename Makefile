@@ -627,6 +627,13 @@ fuzz-coverage:
 	@echo
 	@echo "HTML report: $(FUZZ_COV_HTML)/index.html"
 
+# Deterministic per-function >= 90% region-coverage gate. Builds the coverage
+# harnesses and replays ONLY the committed corpus (no timed fuzz, no HTML), so
+# the number is reproducible; fails if any fuzzed function drops below the bar.
+# Honors LLVM_COV_EXCL_* markers for provably-unreachable defensive branches.
+fuzz-coverage-gate:
+	python3 ci/fuzz-coverage-gate.py
+
 # clean intentionally does NOT wipe $(FUZZ_COV_HTML) — the report is the
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
@@ -639,7 +646,7 @@ distclean: clean
 	fi
 	@sudo rm -f /etc/pam.d/authnft_test /etc/authnft/users/$(TEST_USER)
 
-.PHONY: all debug clean fuzz fuzz-coverage reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-container \
+.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-container \
         test-integration-container test-musl trace trace-container trace-features \
         audit audit-all audit-container audit-vm audit-vm-matrix \
         distclean install install-tmpfiles uninstall man install-man

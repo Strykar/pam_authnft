@@ -1,0 +1,28 @@
+name: fuzz-coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage-gate:
+    # Deterministic per-function >=90% region-coverage gate on the fuzzed
+    # functions. Builds the coverage harnesses and replays only the committed
+    # corpus (no timed fuzz), so a change that drops a fuzzed function below the
+    # bar fails here. Security goal #1 (memory safety in every parser of
+    # attacker-influenced bytes) leans on this coverage holding.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm pkg-config \
+            libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
+      - name: Per-function fuzz-coverage gate
+        run: make fuzz-coverage-gate
