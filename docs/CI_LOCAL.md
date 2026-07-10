@@ -31,7 +31,7 @@ returns the happy-path integration suite never takes.
 |---|---|---|---|
 | 0 | host / GitHub-hosted | existing workflows | build, cppcheck, CodeQL, unit (non-root), fuzz, mutation, ASan/UBSan build-link + the `sanitized-tests` unit runtime under ASan/UBSan/LSan, reproducible-build check, and the THIRD_PARTY linked-library drift gate |
 | 1 | booted-systemd container (rootful, isolated) | `make audit` / `make test-integration-container`; gated nightly by `integration.yml` | unit suite (seccomp SIGSYS enforcement) + all five nft_handler_setup returns under ASan/LSan + real lifecycle under valgrind + the 25-stage integration suite; **catches the frag_buf class** |
-| 2 | virtme-ng microVM (real kernel, KVM) | `make audit-vm`; gated nightly by `audit-vm.yml` (hosted runners carry `/dev/kvm` since 2024) | same audit under a real, pinnable kernel + real cgroup hierarchy; kernel matrix. Part B (integration) excluded here (headless coupling) |
+| 2 | virtme-ng microVM (real kernel, KVM) | `make audit-vm` / `make audit-vm-matrix`; gated nightly by `audit-vm.yml` (hosted runners carry `/dev/kvm` since 2024) | the socket-cgroupv2 packet-match invariants (`tests/packet_match_headless.sh`) plus the A+C audit, under a real, pinnable kernel + real cgroup hierarchy, swept across a kernel matrix. The full integration suite (Part B) is still excluded here (host coupling) |
 | 3 | Coverity weekly + local cov-build | (existing) | path-sensitive inter-procedural static backstop |
 | M | Alpine container (musl libc) | `make test-musl` | unit suite built against musl; catches libc-specific seccomp allowlist gaps (the open/readv/writev class) the glibc tiers cannot |
 
@@ -162,8 +162,13 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
   valgrind and seccomp tangle. The filter is audited separately by the
   `trace` workflow and the negative seccomp tests.
 - Tier 1 shares the host kernel under a nested cgroup namespace, so the
-  socket-cgroupv2 packet-classification stages (10.11/10.12) that need a
-  real cgroup hierarchy are a tier-2 concern.
+  socket-cgroupv2 packet-classification stages (integration 10.11-10.13)
+  that need a real cgroup hierarchy are a tier-2 concern. Their kernel
+  behaviour is extracted into `tests/packet_match_headless.sh` — systemd +
+  nft + ncat only, no pamtester/PAM/sshd — which tier 2 runs in each guest
+  kernel, so the allowed/disallowed match, the alloc-time invariant, and
+  per-session isolation are proven across the kernel matrix. Exit 77 there
+  means the guest kernel lacks socket-cgroupv2 (skipped, not failed).
 - The container image ships no sshd, so 10.25 runs only its pamtester
   control arm there and skips the sshd loopback arm; the full stage needs
   a host with sshd (any OpenSSH >= 9.8, for PAMServiceName).

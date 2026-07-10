@@ -12,6 +12,16 @@
 # and can sweep a kernel matrix to catch nft/netfilter behaviour that is
 # kernel-version specific.
 #
+# Two things run per kernel:
+#   1. tests/packet_match_headless.sh — the socket-cgroupv2 packet-match
+#      invariants (allowed/disallowed match, alloc-time invariant, per-
+#      session isolation). This is the kernel-version-specific behaviour,
+#      decoupled from the PAM/pamtester integration suite so it survives a
+#      headless microVM run. Exit 77 = the guest kernel lacks the feature
+#      (noted, not a failure).
+#   2. audit/run-all.sh — Parts A + C (unit + seccomp + fault matrix), with
+#      Part B (integration) opt-in via AUDIT_RUN_INTEGRATION.
+#
 # Guest writes are ephemeral (virtme-ng overlays the host rootfs), so the
 # audit's groupadd/useradd/nft/etc. mutate nothing on the host. The host
 # must carry the build + test deps (gcc, make, nft, pamtester, valgrind)
@@ -39,25 +49,47 @@ test -e /dev/kvm || echo "WARNING: /dev/kvm absent — vng will be slow (TCG)" >
 overall=0
 for k in $KERNELS; do
     echo "=================================================================="
-    echo "=== tier-2 audit under kernel: $k ==="
+    echo "=== tier-2 under kernel: $k ==="
     echo "=================================================================="
     if [ "$k" = host ]; then
         runspec=(-r)
     else
         runspec=(-r "$k")
     fi
-    # --systemd: systemd as init so systemd-run --scope + pamtester work.
-    # --user root: the audit needs root for nft/group/pam.
-    # The guest runs the same audit/run-audit.sh; its verdict (exit code)
-    # is propagated out by vng.
-    # Runs the reliable A+C audit (unit/seccomp + fault matrix) under a real
-    # kernel. The integration suite (Part B) is opt-in and disabled by
-    # default: it has host-environment coupling that does not survive
-    # headless execution in either audit substrate (see run-all.sh and
-    # docs/CI_LOCAL.md). Set AUDIT_RUN_INTEGRATION=1 to try it; the value is
-    # forwarded into the guest exec below so run-all.sh sees it.
-    if vng "${runspec[@]}" --user root --systemd -p "$CPUS" -m "$MEM" \
-            --exec "cd '$REPO' && AUDIT_RUN_INTEGRATION=${AUDIT_RUN_INTEGRATION:-0} ./audit/run-all.sh"; then
+    # --systemd: systemd as init so systemd-run --scope works.
+    # --user root: both the harness and the audit need root for nft/cgroup/pam.
+    # vng propagates the guest command's exit code out to us.
+    kfail=0
+
+    # Packet-match invariants — the kernel-version-specific proof.
+    echo "--- packet-match invariants ---"
+    vng "${runspec[@]}" --user root --systemd -p "$CPUS" -m "$MEM" \
+        --exec "cd '$REPO' && ./tests/packet_match_headless.sh"
+    pm=$?
+    if [ "$pm" -eq 0 ]; then
+        echo "=== kernel $k packet-match: PASS ==="
+    elif [ "$pm" -eq 77 ]; then
+        echo "=== kernel $k packet-match: SKIP (kernel lacks socket-cgroupv2) ==="
+    else
+        echo "=== kernel $k packet-match: FAIL ==="; kfail=1
+    fi
+
+    # Reliable A+C audit (unit/seccomp + fault matrix). The integration
+    # suite (Part B) stays opt-in and disabled by default: it has host-
+    # environment coupling that does not survive headless execution (see
+    # run-all.sh and docs/CI_LOCAL.md). Set AUDIT_RUN_INTEGRATION=1 to try
+    # it; the value is forwarded into the guest exec so run-all.sh sees it.
+    echo "--- audit (unit + seccomp + fault matrix) ---"
+    vng "${runspec[@]}" --user root --systemd -p "$CPUS" -m "$MEM" \
+        --exec "cd '$REPO' && AUDIT_RUN_INTEGRATION=${AUDIT_RUN_INTEGRATION:-0} ./audit/run-all.sh"
+    au=$?
+    if [ "$au" -eq 0 ]; then
+        echo "=== kernel $k audit: PASS ==="
+    else
+        echo "=== kernel $k audit: FAIL ==="; kfail=1
+    fi
+
+    if [ "$kfail" -eq 0 ]; then
         echo "=== kernel $k: PASS ==="
     else
         echo "=== kernel $k: FAIL ==="
