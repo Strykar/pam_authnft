@@ -196,31 +196,52 @@ Regression inputs preserved at:
 
 CIFuzz re-runs these on every PR.
 
-## Current coverage (per `make fuzz-coverage`)
+## Current coverage (per `make fuzz-coverage-gate`)
 
-Per-function coverage on the **fuzzed** functions (the only ones the
-status legend applies to). HTML report under `docs/fuzz-coverage/`.
+Per-function region coverage on the **fuzzed** functions (the only ones the
+status legend applies to), measured the way the gate enforces it: replaying
+only the committed corpus, on the CI toolchain. Region is the gate metric;
+the exact figure drifts a point or two with the clang version, which is why
+the committed corpus holds every function a few points above the bar.
 
-| Function | Region | Line | Branch | Status |
-|---|---|---|---|---|
-| `util_is_valid_username` | 100.00% | 100.00% | 95.00% | ✅ |
-| `util_normalize_ip` | 93.02% | 96.15% | 91.30% | ✅ |
-| `validate_fragment_content` | 100.00% | 100.00% | 100.00% | ✅ |
-| `substitute_placeholders` | 96.83% †| 100.00% | 97.92% | ✅ |
-| `peer_parse_diag_chunk` | 100.00% | 100.00% | 95.65% | ✅ |
-| `parse_socket_inode` | 100.00% | 100.00% | 100.00% | ✅ |
-| `keyring_sanitize` | 100.00% | 100.00% | 100.00% | ✅ |
-| `corr_sanitize_copy` | 100.00% | 100.00% | 100.00% | ✅ |
-| `validate_cgroup_path` | 95.45% | 100.00% | 100.00% | ✅ |
+| Function | Region (committed corpus) | Status |
+|---|---|---|
+| `util_is_valid_username` | 92.59% | ✅ |
+| `util_normalize_ip` | 93.33% | ✅ |
+| `validate_fragment_content` | 100.00% | ✅ |
+| `validate_fragment_buf` | 98.36% | ✅ |
+| `substitute_placeholders` | 95.24% †| ✅ |
+| `peer_parse_diag_chunk` | 92.54% | ✅ |
+| `parse_socket_inode` | 100.00% | ✅ |
+| `keyring_sanitize` | 100.00% | ✅ |
+| `corr_sanitize_copy` | 100.00% | ✅ |
+| `validate_cgroup_path` | 100.00% | ✅ |
 
-† Stale, needs re-measure. The 2026-07 pre-ship `make fuzz-coverage` reports
-`substitute_placeholders` at **85.54% region** (deterministic corpus-only),
-not 96.83%, and below the 90% bar. The ~15% gap is the three
-`free(); return NULL;` overflow guards, which the corrected ratio bound
-makes effectively unreachable, so this will not cross 90% by fuzzing.
-Before the row can back a CI gate, either annotate those guards with
-`LLVM_COV_EXCL` (leaving reachable code at ~100%) or footnote the bar for
-this one function. Tracked with the deferred fuzz-coverage gate.
+The `≥90%` region bar is now enforced deterministically by
+`make fuzz-coverage-gate` (workflow: `fuzz-coverage.yml`), which replays only
+the committed corpus (`-runs=0`) — no timed fuzz run — so the number is
+reproducible and a regression fails CI. Keeping each function's committed
+corpus rich enough to hold the bar is the maintenance contract. The
+`seed_cover_*` inputs were picked by greedy region set-cover over the local
+fuzz corpus — the minimal set that holds each function's regions — and
+`seed_tgt_*` are hand-written boundary cases (for `validate_cgroup_path`, a
+13-char wrong first component, a missing second slash, a truncating `out_sz`).
+`keyring_sanitize` and `corr_sanitize_copy` reach 100% from their seed inputs
+this way.
+
+† `substitute_placeholders`'s defensive guards that the fuzz harness cannot
+reach are marked `LLVM_COV_EXCL_START/STOP` and dropped by the gate. Stock
+llvm-cov ignores those markers, so `ci/fuzz-coverage-gate.py` honors them
+itself. Six guards are excluded: the three in-loop
+`if (wi ... >= max_expand) { free(); return NULL; }` overflow checks,
+unreachable because the `max_expand` ratio bound budgets `ratio` per source
+byte (`>=` that byte's worst-case expansion, so no write can exceed the
+allocation); the empty-placeholder check, which never fires because the harness
+passes the production placeholder strings; the `src_len * ratio` overflow
+guard, unreachable because a fuzz input cannot be `SIZE_MAX`-scale; and the
+malloc-failure guard, which libFuzzer does not exercise (audit/malloc_fail.so
+covers it separately). What remains is the reachable state machine and matcher,
+which the committed corpus drives above the bar.
 
 Per-source-file region coverage (illustrating how much codebase is
 *untouched* by any harness):
