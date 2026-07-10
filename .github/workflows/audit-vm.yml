@@ -51,5 +51,10 @@ jobs:
             nftables pamtester valgrind
           pipx install virtme-ng
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Make the host kernel readable to virtme-ng
+        # Hosted runners ship /boot/vmlinuz-* root-only, so `vng -r` (KERNELS=host)
+        # cannot read the running kernel. Grant read access to the boot files it
+        # needs. (Non-host kernels use vng's downloaded debs and are unaffected.)
+        run: sudo chmod -f +r /boot/vmlinuz-* /boot/config-* 2>/dev/null || true
       - name: Tier-2 audit under kernel ${{ matrix.kernel }}
         run: KERNELS="${{ matrix.kernel }}" ./ci/vng-audit.sh

@@ -63,8 +63,7 @@ RUN dnf -y install \
 # executes the target make goals, writes the exit code to
 # /shared/exit. Halts systemd at the end so the container exits
 # cleanly on `podman run --rm`.
-RUN cat > /usr/local/bin/run-workflow <<'EOF' \
- && chmod +x /usr/local/bin/run-workflow
+RUN cat > /usr/local/bin/run-workflow <<'EOF'
 #!/bin/bash
 set -uo pipefail
 WORKFLOW=$(cat /shared/workflow 2>/dev/null || echo unit)
@@ -149,9 +148,10 @@ journalctl -u authnft-workflow.service --no-pager -o cat > /shared/log 2>&1 || t
 sync
 systemctl --no-block poweroff
 EOF
+RUN chmod +x /usr/local/bin/run-workflow
 
-RUN mkdir -p /etc/systemd/system && \
-    cat > /etc/systemd/system/authnft-workflow.service <<'EOF'
+RUN mkdir -p /etc/systemd/system
+RUN cat > /etc/systemd/system/authnft-workflow.service <<'EOF'
 [Unit]
 Description=pam_authnft test workflow runner
 After=basic.target
