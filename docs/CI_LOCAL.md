@@ -29,7 +29,7 @@ returns the happy-path integration suite never takes.
 
 | Tier | Substrate | Command | What it adds |
 |---|---|---|---|
-| 0 | host / GitHub-hosted | existing workflows | build, cppcheck, CodeQL, unit (non-root), fuzz, mutation, ASan/UBSan build-link + the `sanitized-tests` unit runtime under ASan/UBSan/LSan |
+| 0 | host / GitHub-hosted | existing workflows | build, cppcheck, CodeQL, unit (non-root), fuzz, mutation, ASan/UBSan build-link + the `sanitized-tests` unit runtime under ASan/UBSan/LSan, reproducible-build check, and the THIRD_PARTY linked-library drift gate |
 | 1 | booted-systemd container (rootful, isolated) | `make audit` / `make test-integration-container`; gated nightly by `integration.yml` | unit suite (seccomp SIGSYS enforcement) + all five nft_handler_setup returns under ASan/LSan + real lifecycle under valgrind + the 25-stage integration suite; **catches the frag_buf class** |
 | 2 | virtme-ng microVM (real kernel, KVM) | `make audit-vm`; gated nightly by `audit-vm.yml` (hosted runners carry `/dev/kvm` since 2024) | same audit under a real, pinnable kernel + real cgroup hierarchy; kernel matrix. Part B (integration) excluded here (headless coupling) |
 | 3 | Coverity weekly + local cov-build | (existing) | path-sensitive inter-procedural static backstop |
