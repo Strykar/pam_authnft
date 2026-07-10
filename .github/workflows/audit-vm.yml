@@ -10,23 +10,28 @@ permissions:
 
 jobs:
   microvm-audit:
-    # Tier 2 (docs/CI_LOCAL.md): audit/run-all.sh (unit + seccomp enforcement +
-    # the nft_handler_setup fault matrix, Parts A and C) under a real kernel in
-    # a virtme-ng microVM. This is the only tier that pins the kernel, so it is
-    # where kernel-version-specific nft/netfilter behaviour is caught. Runnable
-    # on hosted runners since January 2024 added /dev/kvm to ubuntu images.
+    # Tier 2 (docs/CI_LOCAL.md): under a real kernel in a virtme-ng microVM,
+    # each matrix entry runs two things (see ci/vng-audit.sh):
+    #   - tests/packet_match_headless.sh — the socket-cgroupv2 packet-match
+    #     invariants, the kernel-version-specific behaviour this tier exists to
+    #     catch. Decoupled from the pamtester integration suite so it survives
+    #     a headless run.
+    #   - audit/run-all.sh — Parts A + C (unit + seccomp + fault matrix).
+    # This is the only tier that pins the kernel. Runnable on hosted runners
+    # since January 2024 added /dev/kvm to ubuntu images.
     #
-    # The integration suite (Part B) is intentionally NOT run here: it has
+    # The full integration suite (Part B) is intentionally NOT run here: it has
     # host-environment coupling that does not survive headless execution in the
     # microVM (see ci/vng-audit.sh and docs/CI_LOCAL.md). Tier 1
     # (integration.yml) is where the lifecycle stages run green.
     strategy:
       fail-fast: false
       matrix:
-        # Start with the runner's own kernel to prove the KVM + virtme-ng path.
-        # Expand to e.g. [host, v6.12, v6.6] once green; vng fetches the pinned
-        # kernels on demand (see the KERNELS matrix in ci/vng-audit.sh).
-        kernel: [host]
+        # host proves the KVM + virtme-ng path; v6.12 and v6.6 pin older
+        # kernels that vng fetches on demand as .debs (the Ubuntu runner has
+        # dpkg to unpack them), sweeping the packet-match invariants across
+        # kernel versions.
+        kernel: [host, v6.12, v6.6]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -39,15 +44,16 @@ jobs:
           test -e /dev/kvm && echo "/dev/kvm present"
       - name: Install virtme-ng, qemu, and the host build/test deps
         # virtme-ng boots the guest on the HOST rootfs, so the toolchain and
-        # runtime tools (gcc, make, nft, pamtester, valgrind, the -dev libs)
-        # must be present on the runner itself, not only inside a container.
+        # runtime tools (gcc, make, nft, pamtester, valgrind, ncat for the
+        # packet-match harness, the -dev libs) must be present on the runner
+        # itself, not only inside a container.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils busybox-static pipx \
             build-essential pkg-config \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev \
-            nftables pamtester valgrind
+            nftables pamtester valgrind ncat
           pipx install virtme-ng
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Make the host kernel readable to virtme-ng

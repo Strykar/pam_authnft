@@ -158,6 +158,12 @@ test-integration: $(TEST_BIN)
 	    ./$(TEST_BIN)
 	@sudo chown -R $$(id -u):$$(id -g) . 2>/dev/null; true
 
+# Headless socket-cgroupv2 packet-match invariants on the current kernel.
+# No PAM module, sshd or pamtester — systemd + nft + ncat only, so it runs
+# per guest kernel in the tier-2 matrix (see audit-vm-matrix / ci/vng-audit.sh).
+test-packet-match:
+	sudo ./tests/packet_match_headless.sh
+
 # Containerised workflows. Every test surface the project ships runs
 # inside a booted-systemd container on any host with podman or docker
 # — no sudo required, no host state mutation.
@@ -266,22 +272,21 @@ audit-container:
 audit-vm:
 	./ci/vng-audit.sh
 
-# Multi-kernel packet-match confidence run: tier-2 with the integration suite
-# (Part B) enabled across a kernel matrix. This is the one coverage CI cannot
-# gate — hosted runners cannot pin the kernel. It is EXPERIMENTAL and, as of
-# now, does not pass end to end:
-#   - non-host kernels download as Ubuntu .debs and need `dpkg` on the host to
-#     unpack (absent on Arch: `pacman -S dpkg`); without it only KERNELS=host
-#     boots.
-#   - Part B exits without output under the microVM's degraded --systemd init
-#     (see the comment in audit/run-all.sh); making the integration suite
-#     survive headless is follow-on work. Part A + Part C pass on every kernel.
-# Until Part B is de-coupled, single-kernel packet-match coverage comes from
-# `make test-integration-container` (full-systemd container, green). Override
-# the set with AUDIT_KERNELS="host v6.6 v6.1".
+# Multi-kernel packet-match confidence run: tier-2 across a kernel matrix.
+# Each kernel runs tests/packet_match_headless.sh (the socket-cgroupv2
+# invariants, decoupled from the pamtester integration suite so they run
+# headless) plus the A+C audit. This is the one coverage CI cannot gate on
+# arbitrary kernels locally — hosted runners can, since their Ubuntu image
+# has dpkg to unpack vng's downloaded kernels.
+#   - non-host kernels download as Ubuntu .debs and need `dpkg` on the host
+#     to unpack (absent on Arch: `pacman -S dpkg`); without it only
+#     KERNELS=host boots.
+# Override the set with AUDIT_KERNELS="host v6.6 v6.1". AUDIT_RUN_INTEGRATION
+# is left off: packet-match now comes from the headless harness, and Part B
+# still does not survive the microVM's degraded --systemd init.
 AUDIT_KERNELS ?= host v6.12 v6.6
 audit-vm-matrix:
-	KERNELS="$(AUDIT_KERNELS)" AUDIT_RUN_INTEGRATION=1 ./ci/vng-audit.sh
+	KERNELS="$(AUDIT_KERNELS)" ./ci/vng-audit.sh
 
 # `make audit` is the local gate: tier 1 (container) by default — the same
 # thing the pre-commit hook runs. `make audit-all` adds the tier-2 microVM.
@@ -627,6 +632,13 @@ fuzz-coverage:
 	@echo
 	@echo "HTML report: $(FUZZ_COV_HTML)/index.html"
 
+# Deterministic per-function >= 90% region-coverage gate. Builds the coverage
+# harnesses and replays ONLY the committed corpus (no timed fuzz, no HTML), so
+# the number is reproducible; fails if any fuzzed function drops below the bar.
+# Honors LLVM_COV_EXCL_* markers for provably-unreachable defensive branches.
+fuzz-coverage-gate:
+	python3 ci/fuzz-coverage-gate.py
+
 # clean intentionally does NOT wipe $(FUZZ_COV_HTML) — the report is the
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
@@ -639,7 +651,7 @@ distclean: clean
 	fi
 	@sudo rm -f /etc/pam.d/authnft_test /etc/authnft/users/$(TEST_USER)
 
-.PHONY: all debug clean fuzz fuzz-coverage reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-container \
+.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-container \
         test-integration-container test-musl trace trace-container trace-features \
         audit audit-all audit-container audit-vm audit-vm-matrix \
         distclean install install-tmpfiles uninstall man install-man
