@@ -44,15 +44,16 @@ jobs:
           test -e /dev/kvm && echo "/dev/kvm present"
       - name: Install virtme-ng, qemu, and the host build/test deps
         # virtme-ng boots the guest on the HOST rootfs, so the toolchain and
-        # runtime tools (gcc, make, nft, pamtester, valgrind, the -dev libs)
-        # must be present on the runner itself, not only inside a container.
+        # runtime tools (gcc, make, nft, pamtester, valgrind, ncat for the
+        # packet-match harness, the -dev libs) must be present on the runner
+        # itself, not only inside a container.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils busybox-static pipx \
             build-essential pkg-config \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev \
-            nftables pamtester valgrind
+            nftables pamtester valgrind ncat
           pipx install virtme-ng
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Make the host kernel readable to virtme-ng
