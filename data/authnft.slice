@@ -44,10 +44,18 @@ Documentation=man:systemd.resource-control(5)
 #SocketBindDeny=ipv4:tcp:1-1023   # prevent binding privileged ports
 #SocketBindDeny=ipv6:tcp:1-1023
 
-# --- SECURITY ---
-#NoNewPrivileges=yes
-#CapabilityBoundingSet=   # drop all capabilities
-#SystemCallFilter=@system-service
-#SystemCallErrorNumber=EPERM
-#RestrictNamespaces=yes
-#RestrictSUIDSGID=yes
+# --- NOT AVAILABLE HERE: exec-context sandboxing ---
+# NoNewPrivileges, CapabilityBoundingSet, SystemCallFilter,
+# SystemCallErrorNumber, RestrictNamespaces, RestrictSUIDSGID and the rest of
+# systemd.exec(5)'s sandboxing are applied when systemd EXECS a process. A
+# .scope adopts processes sshd already forked, so systemd never execs them and
+# these directives do not apply. Setting them in a [Slice] is not an error and
+# not a protection either — systemd logs
+#     Unknown key 'SystemCallFilter' in section [Slice], ignoring.
+# and carries on, so you would be running with no filter while believing you
+# had one. They are deliberately not listed above.
+#
+# The module already applies its own seccomp allowlist (SCMP_ACT_KILL) to the
+# forked child that parses untrusted input, which is the surface that needs
+# containment. To confine the user's session processes, put the limits on the
+# unit that spawns them (sshd), not on this slice.

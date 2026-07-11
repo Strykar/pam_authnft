@@ -96,7 +96,8 @@ required.
 sequenceDiagram
     participant U as User (sshd)
     participant P as PAM stack
-    participant A as pam_authnft
+    participant A as pam_authnft (sshd monitor, unsandboxed)
+    participant C as setup child (forked, sandboxed)
     participant D as systemd (D-Bus)
     participant N as nftables (kernel)
     participant F as filesystem
@@ -105,26 +106,34 @@ sequenceDiagram
     U->>P: open_session
     P->>A: pam_sm_open_session
     A->>A: validate PAM_USER, normalize PAM_RHOST
-    A->>A: apply seccomp-BPF allowlist
     A->>D: StartTransientUnit (authnft-<user>-<pid>.scope)
     D-->>A: scope created under authnft.slice
     A->>A: construct cg_path, per-session chain/set names
 
-    Note over A,N: nft transaction 1
-    A->>N: add table + shared filter chain
-    A->>N: add ct state established,related accept (pre-scope sockets)
-    A->>N: add per-session chain
-    A->>N: add 3 per-session sets (_v4, _v6, _cg)
-    A->>N: add element { cg_path . src_ip } in selected set
+    A->>C: fork setup child
+    C->>C: nft_user_in_authnft_group (NSS: getgrnam/getpwnam)
+    Note over C: NSS runs BEFORE the filter — sss/ldap backends<br/>would be SIGSYS-killed under it. Non-member: PAM_SUCCESS, no nft state.
+    C->>C: apply seccomp-BPF allowlist (SCMP_ACT_KILL)
+    C->>C: read /etc/authnft/users/<user>, validate owner + content
+    Note over C: a missing / insecure / rejected fragment returns<br/>PAM_AUTH_ERR here, before any nft object is created
 
-    Note over A,N: nft transaction 2
-    A->>N: add jump rule from filter to per-session chain
-    N-->>A: jump rule handle (stored for cleanup)
+    Note over C,N: nft transaction 1
+    C->>N: add table + shared filter chain
+    C->>N: ensure ct state established,related accept (added only if absent)
+    C->>N: add per-session chain
+    C->>N: add 3 per-session sets (_v4, _v6, _cg)
+    C->>N: add element { cg_path . src_ip } in the family's set<br/>(or the _cg set when no usable PAM_RHOST)
 
-    Note over A,N: nft transaction 3
-    A->>A: read /etc/authnft/users/<user>, validate ownership
-    A->>A: substitute @session_v4/v6/cg/chain placeholders
-    A->>N: execute substituted fragment
+    Note over C,N: nft transaction 2
+    C->>N: add jump rule from filter to per-session chain
+    N-->>C: jump rule handle (stored for cleanup)
+
+    Note over C,N: nft transaction 3
+    C->>C: substitute @session_v4/v6/cg/chain placeholders
+    C->>N: execute substituted fragment
+
+    C-->>A: setup rc + jump handle (over pipe), child _exit()s
+    Note over A,N: the child dies — its nft state lives on in the kernel
 
     A->>F: write /run/authnft/sessions/<scope>.json
     A->>J: AUTHNFT_EVENT=open (correlation token)
@@ -184,42 +193,63 @@ and bob are matched by entirely different rules.
 
 Sessions are isolated from each other: alice's per-session chain only
 ever references alice's per-session set, which contains exactly one
-element (her cg_path . src_ip). Removing that element at close_session,
-or deleting the per-session chain entirely, instantly stops her rules
-from firing — bob's chain and set are untouched.
+element (her cg_path . src_ip). Deleting her per-session set at
+close_session — which takes the element with it — or deleting her
+per-session chain, instantly stops her rules from firing; bob's chain and
+set are untouched.
 
 On session open:
 
 1. Normalises `PAM_RHOST`: IPv4/IPv6 literals pass through, zone suffixes
    stripped, hostnames handled per `rhost_policy` (see [Module
    arguments](#module-arguments)).
-2. Locks the PAM process with a seccomp-BPF allowlist (`SCMP_ACT_KILL`
-   default).
-3. Creates a named transient `.scope` under `authnft.slice` via D-Bus.
-4. Constructs the scope's cgroupv2 path (`authnft.slice/<scope>.scope`) and
+2. Creates a named transient `.scope` under `authnft.slice` via D-Bus.
+3. Constructs the scope's cgroupv2 path (`authnft.slice/<scope>.scope`) and
    stores it in PAM data alongside per-session chain/set names, the
    normalised source IP, and a correlation token.
-5. Creates a per-session chain (`session_<user>_<pid>`) and three
-   per-session sets (`_v4`, `_v6`, `_cg`). Inserts a session element
-   into one set based on the resolved IP family. Adds a jump rule in the
-   shared `filter` chain.
-6. Validates and loads the user's root-owned fragment at
-   `/etc/authnft/users/<username>`, substituting four placeholders
-   (`@session_v4`, `@session_v6`, `@session_cg`, `@session_chain`)
-   with the live per-session names.
-7. Writes `/run/authnft/sessions/<scope_unit>.json` (0644 root:root) so
-   unprivileged observers can correlate the cgroup back to the owning
-   session — see [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) §5.6.
-8. Emits a structured `AUTHNFT_EVENT=open` journal entry with the
-   correlation token — see [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt)
-   §6.2.
+4. Forks a short-lived setup child. In that child, and **before** any
+   sandbox is applied, resolves `authnft` group membership through NSS
+   (`getgrnam`/`getpwnam`). A non-member returns `PAM_SUCCESS` and no
+   nftables state is created. NSS runs unsandboxed on purpose: backends
+   like `sss` and `ldap` issue syscalls the allowlist does not cover and
+   would be SIGSYS-killed under it.
+5. Locks **that child** — and only that child — with a seccomp-BPF
+   allowlist (`SCMP_ACT_KILL` default). The calling PAM process (the sshd
+   privsep monitor) is never filtered; the D-Bus call above already ran
+   outside the sandbox.
+6. Validates the user's root-owned fragment at
+   `/etc/authnft/users/<username>` (must exist, be uid 0, and not be
+   world-writable) and content-checks it. A missing, insecure or rejected
+   fragment fails the session here, before any nftables object exists.
+7. Creates a per-session chain (`session_<user>_<pid>`) and three
+   per-session sets (`_v4`, `_v6`, `_cg`), and inserts a session element
+   into the set for the resolved IP family — or into `_cg` (keyed on the
+   cgroup path alone) when no usable `PAM_RHOST` was available. Adds a
+   jump rule in the shared `filter` chain.
+8. Loads the fragment, substituting four placeholders (`@session_v4`,
+   `@session_v6`, `@session_cg`, `@session_chain`) with the live
+   per-session names, and executes the result as nftables commands.
+9. The child reports its result over a pipe and exits. Its nftables state
+   lives on in the kernel. Back in the unsandboxed parent:
+   `/run/authnft/sessions/<scope_unit>.json` is written **0640 root:root**
+   — root-only, because it carries `claims_tag` — so a privileged observer
+   can correlate the cgroup back to the owning session. See
+   [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) §5.6.
+10. Emits a structured `AUTHNFT_EVENT=open` journal entry with the
+    correlation token — see [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt)
+    §6.2.
 
 On logout the stored session state is retrieved from PAM data: the jump rule
 is deleted by handle, the per-session chain is flushed and deleted, and the
-three per-session sets are deleted in a single transaction. The
-session-identity JSON is unlinked and a matching `AUTHNFT_EVENT=close`
-journal entry is emitted with the same correlation token. The shared
-`filter` chain and `authnft` table persist across sessions.
+three per-session sets are deleted — all in one transaction. If that
+transaction aborts because an object is already gone (its element's 24h
+timeout fired, an orphan reap ran, an operator cleaned up by hand), each
+object is torn down in its own transaction instead, so one missing object
+cannot strand the rest. Teardown is best-effort: `close_session` always
+unwinds. The session-identity JSON is unlinked and a matching
+`AUTHNFT_EVENT=close` journal entry is emitted with the same correlation
+token. The shared `filter` chain and `authnft` table persist across
+sessions.
 
 For the full lifecycle, trust model, and seccomp details, see
 [docs/ARCHITECTURE.txt](docs/ARCHITECTURE.txt).
@@ -325,7 +355,8 @@ is a documented kernel or userspace primitive.
   the target host — it drives the real match and exits non-zero if the kernel
   accepts the rule but never matches on it.
 - systemd with D-Bus
-- nftables >= 1.0.6
+- nftables (libnftables) — see [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md)
+  for the tested version floor
 - Build: `gcc`, `make`, `pkg-config`
 - Libraries: `libnftables`, `libseccomp`, `libsystemd`, `libcap`, `libaudit`, `pam`
 
@@ -361,11 +392,17 @@ sudo chmod 644 /etc/authnft/users/alice
 
 Add to `/etc/pam.d/sshd` (after `pam_systemd.so`):
 ```
-session  optional  pam_authnft.so
+session  required  pam_authnft.so
 ```
 
 Group members without a valid fragment are denied at session open (logged to
-syslog). Non-members pass through unaffected.
+syslog). Non-members pass through unaffected: the module returns success for
+them itself, so `required` does not gate anyone who is not in the group.
+
+Use `optional` instead only if you want a failed fragment to be *logged but
+not block the login* — PAM discards the module's return code under `optional`,
+so a member whose fragment is missing or broken would get a session with no
+firewall rules applied. See [PAM stack options](#pam-stack-options).
 
 See `examples/examples_generator.sh -f` for port-restricted, masquerade, and
 time-limited fragment variants.
@@ -378,7 +415,7 @@ time-limited fragment variants.
 |---|---|---|
 | `rhost_policy=lax` | ✓ | Use PAM_RHOST if it parses as an IP, else fall back to cgroup-only set |
 | `rhost_policy=strict` |  | Deny session when PAM_RHOST is not a parseable IP literal (pre-0.2 behaviour) |
-| `rhost_policy=kernel` |  | Derive peer IP from the session process's own ESTABLISHED TCP socket via `NETLINK_SOCK_DIAG` (see `ss(8)`). Logs a warning on divergence with PAM_RHOST. Falls through to `lax` on lookup failure |
+| `rhost_policy=kernel` |  | Derive peer IP from the session process's own **inbound** ESTABLISHED TCP socket via `NETLINK_SOCK_DIAG` (see `ss(8)`). Only a socket whose local port is one of the host's TCP listeners qualifies, so an outbound socket the process also holds (LDAP, Kerberos) is never used. If no such socket is found the lookup fails and the module falls through to `lax`. Logs a warning on divergence with PAM_RHOST. Falls through to `lax` on lookup failure |
 | `claims_env=NAME` |  | Read PAM env var `NAME` for a kernel-keyring serial; embed the sanitized keyed payload in the nftables element comment. See [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) §2 |
 | `AUTHNFT_NO_SANDBOX=1` |  | Disable the seccomp sandbox. Debugging only |
 
@@ -443,13 +480,29 @@ Why the keyring rather than a file or env var alone:
 
 ### PAM stack options
 
-Option A — module checks group membership internally; non-members pass through:
+The module resolves `authnft` group membership itself and returns
+`PAM_SUCCESS` for a non-member, so the control flag only decides what happens
+to a **member whose fragment is missing, insecure, or rejected** — the module
+returns `PAM_AUTH_ERR` for that case.
+
+Option A (recommended) — fail closed. A member with a broken fragment is
+denied; non-members are unaffected, because the module already returned
+success for them:
+```
+session  required  pam_authnft.so
+```
+
+Option B — fail open. PAM **discards** the module's return code under
+`optional`, so a member with a broken fragment still gets a session, with no
+firewall rules applied. The failure is only visible in syslog. Use this if you
+are rolling the module out and do not yet want it to be able to block a login:
 ```
 session  optional  pam_authnft.so
 ```
 
-Option B — PAM gates on group membership. Members without a valid fragment are
-denied; non-members skip the module entirely:
+Option C — gate in PAM rather than in the module, so non-members never reach
+it at all (equivalent enforcement to A, useful if you want the group check
+visible in the stack):
 ```
 session  [success=1 default=ignore]  pam_succeed_if.so  user notingroup authnft  quiet
 session  required  pam_authnft.so
@@ -461,7 +514,9 @@ Each group member needs `/etc/authnft/users/<username>`, owned by root and not
 world-writable. Before loading, the module calls `stat(2)` on the fragment path
 and rejects it unless `st_uid == 0` and the world-writable bit is clear — the
 same trust model used by `/etc/nftables.conf` and sudoers includes. The
-fragment is included at the top level and run as nftables commands.
+fragment's contents are read, placeholder-substituted, and executed as
+nftables commands at the top level (the module does not emit an nftables
+`include` for it).
 
 A fragment may use nftables' `include` directive to pull in shared rules
 from other files — for example, a group-level fragment under
@@ -531,10 +586,16 @@ pam_authnft publishes session state through two complementary out-of-band
 channels, in addition to the nftables state above:
 
 - **`/run/authnft/sessions/<scope_unit>.json`** — a per-session JSON file
-  (0644 root:root) written on open and removed on close, with a versioned
-  schema (`v=2`) containing user, cgroup path, remote IP, fragment path,
-  claims tag, scope unit, correlation token, and RFC 3339 open timestamp.
-  Directory is created at boot by `/usr/lib/tmpfiles.d/authnft.conf`;
+  (**0640 root:root — root-only**) written on open and removed on close, with
+  a versioned schema (`v=2`) containing user, cgroup path, remote IP, fragment
+  path, claims tag, scope unit, and RFC 3339 open timestamp. It is *not*
+  world-readable: it carries `claims_tag`, and the `authnft` group is the
+  monitored-subject population, so group-readability would leak one subject's
+  claims to another. A site that wants an unprivileged agent to read it should
+  `chown` the file to a dedicated observer group distinct from `authnft` — the
+  group-read bit is retained (mode 0640) so that is a drop-in change. The
+  correlation token is *not* in this file; it is carried on the journal events
+  below. Directory is created at boot by `/usr/lib/tmpfiles.d/authnft.conf`;
   orphans from failed close paths are reaped after 7 days. Full schema in
   [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) §5.6.
 
@@ -547,13 +608,14 @@ channels, in addition to the nftables state above:
   `pam_putenv(pamh, "AUTHNFT_CORRELATION=<trace-id>")`. Full field
   schema in [docs/INTEGRATIONS.txt](docs/INTEGRATIONS.txt) §6.2.
 
-Both sinks are fail-open: a write failure logs at LOG_WARNING but does not
-deny the session.
+Both sinks are fail-open and never deny the session: a session-file write
+error logs at `LOG_WARNING`; a journal-send error re-emits the event through
+`pam_syslog(LOG_INFO)` so it still reaches syslog.
 
 ### systemd controls
 
-Because every session lands in a named `.scope` unit, the full systemd
-resource control and sandboxing machinery is available — `man
+Because every session lands in a named `.scope` unit under `authnft.slice`,
+systemd's **resource control** machinery applies to it — `man
 systemd.resource-control(5)`. All settings in `data/authnft.slice` are
 commented out; uncomment what you need.
 
@@ -566,26 +628,41 @@ SocketBindDeny=ipv4:tcp:1-1023
 SocketBindDeny=ipv6:tcp:1-1023
 ```
 
-**Syscall and capability restriction** — applied to all processes in the
-scope at creation:
-```ini
-SystemCallFilter=@system-service
-SystemCallErrorNumber=EPERM
-NoNewPrivileges=yes
-CapabilityBoundingSet=
-RestrictNamespaces=yes
+Plus the usual `CPUQuota=`, `MemoryMax=`, `TasksMax=`, `IOWeight=`, and the
+`IPAccounting=` counters.
+
+**What a slice cannot do.** Exec-context sandboxing — `SystemCallFilter=`,
+`NoNewPrivileges=`, `CapabilityBoundingSet=`, `RestrictNamespaces=`,
+`RestrictSUIDSGID=` — is **not available here**. Those directives are applied
+by systemd when it *spawns* a process, and a `.scope` adopts processes that
+sshd already forked; systemd never execs them. Put them in a `.slice` and
+systemd parses the unit, logs `Unknown key '…' in section [Slice], ignoring`,
+and starts it anyway:
+
 ```
+$ systemd-analyze verify authnft.slice
+authnft.slice:5: Unknown key 'SystemCallFilter' in section [Slice], ignoring.
+authnft.slice:6: Unknown key 'NoNewPrivileges' in section [Slice], ignoring.
+```
+
+So a syscall filter added there is silently a no-op, not a protection. The
+module's own seccomp allowlist (`SCMP_ACT_KILL`) covers the code that parses
+untrusted input — the forked nftables setup child — and that is where the
+containment actually is. To restrict the *user's* session processes, set the
+limits on the service that spawns them (sshd), not on this slice.
 
 ## Testing
 
 ```
 make test               # unit tests, no root needed
 make test-integration   # pamtester + valgrind, requires root
+make test-packet-match  # does THIS kernel actually match socket cgroupv2 on INPUT?
 ```
 
 Container workflows (recommended — no host mutation, requires `podman` only):
 ```
-make test-container              # unit suite, 13 stages, CAP_NET_ADMIN
+make audit                       # the local gate: fault matrix (6 scenarios) under ASan/LSan
+make test-container              # unit suite (13 stages) + validator/peer-lookup binaries
 make test-integration-container  # pamtester end-to-end + valgrind
 make trace-container             # seccomp allowlist trace
 make test-musl                   # unit suite built against musl (Alpine)
@@ -646,8 +723,10 @@ welcome. The areas where help is most wanted:
   or AAA stack and want to try the `claims_env` path, seed
   `AUTHNFT_CORRELATION` for audit joining, or drive fragment generation,
   open an issue describing the use case
-- **Fuzzing** — libFuzzer harnesses for `util_is_valid_username`,
-  `util_normalize_ip`, and nft fragment parsing
+- **Fuzzing** — the eight harnesses in `fuzz/` all clear the 90% region-coverage
+  gate (see [docs/FUZZ_SURFACE.md](docs/FUZZ_SURFACE.md)). Wanted: harnesses for
+  functions not yet on that surface map, and property assertions for the
+  crash-only harnesses
 - **Documentation** — man page improvements, deployment guides, example
   fragments for common scenarios
 
@@ -673,6 +752,8 @@ Advisories](https://github.com/identd-ng/pam_authnft/security/advisories)
 | [docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md) | Internal runbook for handling a security report (the public policy is [SECURITY.md](SECURITY.md)) |
 | [docs/SECURITY_PRACTICES.md](docs/SECURITY_PRACTICES.md) | Single-page overview of every security tool, doc, goal, and milestone in the project |
 | [docs/REPRODUCIBLE_BUILDS.md](docs/REPRODUCIBLE_BUILDS.md) | What reproducibility we provide, what we don't, and how a packager verifies a release artefact |
+| [docs/FUZZ_SURFACE.md](docs/FUZZ_SURFACE.md) | Fuzz-surface map: which functions are fuzzed, by which harness, at what coverage, and the bugs the harnesses found |
+| [docs/CI_LOCAL.md](docs/CI_LOCAL.md) | Replicating the CI gates locally (the container audit tier, the fault matrix, the kernel packet-match check) |
 | [SECURITY.md](SECURITY.md) | Vulnerability scope and reporting procedure |
 
 ## License

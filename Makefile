@@ -215,7 +215,7 @@ define RUN_CONTAINER
 	 exit $$EC
 endef
 
-# Unit tests inside the container (`make test` — 10 stages, all with
+# Unit tests inside the container (`make test` — 13 stages, all with
 # CAP_NET_ADMIN so no stages SKIP on that account).
 test-container: RESULT_DIR = $(CURDIR)/.container-result
 test-container:

@@ -258,8 +258,13 @@ Unit suite (`tests/test_suite.c`):
         with full payload sanitization
   11    collect_socket_inodes honors the INODES_CAP bound and reports
         truncation
-  12    session_file_write produces 0640 root:root, degrading to
-        root:authnft where the group exists
+  12    session_file_write produces 0640 root:root -- always. It does NOT
+        fchown to the authnft group: the file carries claims_tag, and the
+        authnft group is exactly the monitored-subject population, so
+        group-readability would leak one subject's claims to another.
+        Unit stage 12 asserts uid == 0 AND gid == 0. The group-read bit
+        is kept (0640) only so a site can fchown to a dedicated observer
+        group distinct from authnft.
   13    Setup-path libc syscalls (heap, file read, NSS lookup, netlink
         socket) survive the sandbox — guards against libc-specific
         allowlist gaps such as the musl open/readv/writev class
