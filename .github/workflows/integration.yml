@@ -38,11 +38,18 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0   # the scope probe below diffs against the PR base
+
+      - id: scope
+        uses: ./.github/actions/docs-only
       - name: Install podman
+        if: steps.scope.outputs.result != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends podman
       - name: Run ${{ matrix.target }} (booted-systemd container)
+        if: steps.scope.outputs.result != 'true'
         # If the systemd-init container fails to boot under rootless podman on
         # the hosted image, switch this to `sudo make ${{ matrix.target }}`
         # (rootful podman). This is the unproven step called out above.
