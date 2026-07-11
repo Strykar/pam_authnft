@@ -174,6 +174,24 @@ static void test_semicolon_separated_bad_verb(void)
     }
 }
 
+/* A bad verb on the last line hidden behind a trailing '#' comment with no
+ * closing newline must still be rejected. The buffer ends with in_comment
+ * set; the final-statement check must not skip on that (regression: the
+ * `!in_comment` guard let `flush ruleset # x` through with no trailing \n). */
+static void test_trailing_comment_bad_verb(void)
+{
+    const char *cases[] = {
+        "flush ruleset # wipe",                 /* no trailing newline */
+        "add table inet t; flush ruleset # x",  /* ';'-split, then comment */
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        int rc = validate_fragment_buf(NULL, "test.nft",
+                                       cases[i], strlen(cases[i]));
+        if (rc != -1)
+            FAIL("trailing-comment case [%zu] '%s' not rejected", i, cases[i]);
+    }
+}
+
 /* Non-canonical whitespace between keywords must not evade the
  * shared-chain guard (token-based match, not fixed-string memcmp). */
 static void test_shared_chain_whitespace(void)
@@ -193,8 +211,8 @@ static void test_shared_chain_whitespace(void)
 }
 
 /* Legitimate fragments must still pass: ';'-joined per-session rules, an
- * anonymous set with '{ }', and a ';' inside a brace block (a chain-property
- * separator, not a top-level command boundary). */
+ * anonymous set with '{ }', and a ';' inside a brace block (a set-definition
+ * property separator at depth > 0, not a top-level command boundary). */
 static void test_legit_multi_statement_accepted(void)
 {
     const char *cases[] = {
@@ -203,6 +221,9 @@ static void test_legit_multi_statement_accepted(void)
         "add rule inet authnft @session_chain tcp dport { 22, 80, 443 } accept\n",
         "add rule inet authnft @session_chain ip saddr @session_v4 accept ; "
             "add rule inet authnft @session_chain ip6 saddr @session_v6 accept\n",
+        /* ';' inside '{ }' is at depth 1, so it must not split the statement
+         * (else "flags timeout" / "}" would be checked as bare statements). */
+        "add set inet authnft mine { typeof ip saddr; flags timeout; }\n",
     };
     for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
         int rc = validate_fragment_buf(NULL, "test.nft",
@@ -381,6 +402,7 @@ int main(void)
     test_include_path_accepted();
     test_empty_and_comment_lines();
     test_semicolon_separated_bad_verb();
+    test_trailing_comment_bad_verb();
     test_shared_chain_whitespace();
     test_legit_multi_statement_accepted();
 
