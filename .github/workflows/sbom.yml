@@ -26,9 +26,13 @@ jobs:
             build-essential pkg-config \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
       - name: Install syft (pinned)
-        # Pinned to a released version. For stricter supply-chain hygiene,
-        # vendor the installer or pin it by commit.
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "$HOME/.local/bin" v1.46.0
+        # The installer script is pinned to the commit the v1.46.0 tag points
+        # at, so the piped-to-sh script is immutable (raw .../main/ served a
+        # mutable script into a contents:write job). The binary version is
+        # pinned to the same release.
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/b15c5dbfe2bb21c9d73002c1056a829c8c411c75/install.sh \
+            | sh -s -- -b "$HOME/.local/bin" v1.46.0
       - name: Build and generate the CycloneDX SBOM
         run: |
           export PATH="$HOME/.local/bin:$PATH"

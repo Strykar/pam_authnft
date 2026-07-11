@@ -20,17 +20,33 @@ DOC=docs/THIRD_PARTY.md
 BASELINE='^(libc|ld-linux.*|libgcc_s|libm|libpthread|libdl|librt)(\.|$)'
 
 fail=0
+
+# Read DT_NEEDED up front. Under `set -o pipefail`, a readelf failure (tool
+# missing, unreadable/malformed .so) fails this assignment and aborts the
+# gate. The previous `done < <(readelf ...)` process substitution swallowed
+# that failure and fed an empty loop, which passed vacuously.
+needed=$(readelf -d "$SO" | awk -F'[][]' '/NEEDED/{print $2}')
+[ -n "$needed" ] || {
+    echo "no DT_NEEDED entries in $SO — readelf failed or the .so is malformed" >&2
+    exit 1
+}
+
 while read -r lib; do
     [ -z "$lib" ] && continue
     echo "$lib" | grep -qE "$BASELINE" && continue
-    base=$(echo "$lib" | sed -E 's/^lib//; s/\.so.*//')   # libnftables.so.1 -> nftables
-    if grep -qiE "(lib)?${base}[^a-z]" "$DOC"; then
+    # Require an inventory ROW, not a prose mention: the soname stem
+    # (libnftables.so.1 -> libnftables) must appear, word-bounded, on a table
+    # row (line starting with '|'). Deleting the row removes the only match so
+    # the gate fails; a stray mention in a sentence (which never starts with
+    # '|') no longer satisfies it.
+    stem=$(echo "$lib" | sed -E 's/\.so.*//')             # libnftables.so.1 -> libnftables
+    if grep -qE "^\|.*[^a-zA-Z]${stem}([^a-zA-Z]|\$)" "$DOC"; then
         printf '  ok    %-20s documented\n' "$lib"
     else
         printf '  DRIFT %-20s linked but absent from %s\n' "$lib" "$DOC"
         fail=1
     fi
-done < <(readelf -d "$SO" | awk -F'[][]' '/NEEDED/{print $2}')
+done <<< "$needed"
 
 if [ "$fail" -eq 0 ]; then
     echo "THIRD_PARTY.md covers every linked library."
