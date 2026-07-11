@@ -81,9 +81,21 @@ def main():
     for b in bins:
         h = os.path.basename(b)
         corpus = f"fuzz/corpus/{h[len('fuzz_'):]}"
-        cmd = [b, "-runs=0"] + ([corpus] if os.path.isdir(corpus) else [])
-        subprocess.run(cmd, env={**os.environ, "LLVM_PROFILE_FILE": f"{COV}/gate-{h}.profraw"},
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Replay only git-TRACKED corpus files, passed as explicit file
+        # arguments. Passing the directory replays untracked local fuzz
+        # leftovers too, which once made a thin committed corpus look
+        # green locally while failing on a clean CI checkout.
+        tracked = subprocess.run(["git", "ls-files", "-z", corpus],
+                                 capture_output=True).stdout.decode()
+        files = [f for f in tracked.split("\0") if f]
+        proc = subprocess.run([b, "-runs=0"] + files,
+                              env={**os.environ, "LLVM_PROFILE_FILE": f"{COV}/gate-{h}.profraw"},
+                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if proc.returncode != 0:
+            # A crash during replay is a bug find, not a coverage number.
+            sys.stderr.write(proc.stderr.decode(errors="replace"))
+            sys.exit(f"{h}: corpus replay crashed (exit {proc.returncode}) — "
+                     "fix the crash before gating coverage")
     prof = f"{COV}/gate.profdata"
     subprocess.run(f"llvm-profdata merge -sparse {COV}/gate-*.profraw -o {prof}",
                    shell=True, check=True)
