@@ -8,6 +8,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # One in-flight run per PR (github.ref is refs/pull/<n>/merge on a PR, so
+  # PRs never cancel each other and push-to-main sits in its own group). The
+  # cancel only fires for pull_request events, so a push to main or a cron run
+  # is never interrupted mid-flight. Workflow-level, not job-level: a matrix
+  # job with a matrix-blind group key would cancel its own sibling leg and
+  # report 'cancelled' on the head SHA, which branch protection blocks on.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   musl-unit:
     runs-on: ubuntu-latest
