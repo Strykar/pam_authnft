@@ -28,5 +28,7 @@ audit/nft_fail.so
 # The committed corpus lives in fuzz/corpus/; everything below is generated.
 fuzz/coverage/
 fuzz/out/
+# Persisted libFuzzer corpus restored by the nightly cache (fuzz-nightly.yml).
+fuzz/corpus-cache/
 *.profraw
 *.profdata

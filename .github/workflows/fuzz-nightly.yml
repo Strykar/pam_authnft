@@ -79,12 +79,31 @@ jobs:
           echo "seconds=$dur" >> "$GITHUB_OUTPUT"
           echo "Fuzzing ${{ matrix.harness }} for $dur seconds"
 
+      # Restore the corpus this harness accumulated on previous nights so
+      # coverage compounds instead of restarting from the committed seeds every
+      # time. Keyed per harness (the eight corpora are unrelated) on the run id,
+      # which never matches on restore, so restore-keys falls back to the most
+      # recently saved cache for this harness and the save below always writes a
+      # fresh key. A PR run's cache is scoped to its own merge ref and cannot be
+      # restored here, so no fork PR can seed what the nightly fuzzes.
+      - name: Restore corpus cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus-cache/${{ matrix.harness }}
+          key: fuzz-corpus-${{ matrix.harness }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.harness }}-
+
       - name: Fuzz ${{ matrix.harness }}
         id: fuzz
         run: |
-          mkdir -p fuzz/crashes
-          corpus_dir="fuzz/corpus/${HARNESS_NAME#fuzz_}"
-          [ -d "$corpus_dir" ] || corpus_dir=""
+          mkdir -p fuzz/crashes "fuzz/corpus-cache/${HARNESS_NAME}"
+          seed_dir="fuzz/corpus/${HARNESS_NAME#fuzz_}"
+          [ -d "$seed_dir" ] || seed_dir=""
+          # libFuzzer writes newly discovered inputs into the FIRST corpus dir
+          # on argv, so the persisted cache dir goes first and the git-tracked
+          # seeds second — fuzz/corpus/ is only read, never written, which keeps
+          # it out of the way of the coverage gate that replays it.
           # libFuzzer exit codes:
           #   0   timed-out cleanly (-max_total_time)
           #   77  crash (the bug we want)
@@ -93,7 +112,7 @@ jobs:
           ./fuzz/out/${HARNESS_NAME} \
             -max_total_time=${SECONDS_LIMIT} \
             -artifact_prefix=fuzz/crashes/${HARNESS_NAME}- \
-            $corpus_dir \
+            "fuzz/corpus-cache/${HARNESS_NAME}" $seed_dir \
             > fuzz/crashes/${HARNESS_NAME}.log 2>&1
           ec=$?
           set -e
@@ -106,6 +125,35 @@ jobs:
         env:
           HARNESS_NAME: ${{ matrix.harness }}
           SECONDS_LIMIT: ${{ steps.duration.outputs.seconds }}
+
+      - name: Minimize corpus before save
+        # Only on a clean run: a crashing binary cannot -merge. On a crash the
+        # raw discovered corpus is saved as-is by the next step. -merge=1 copies
+        # only coverage-increasing inputs into an empty dir, bounding growth
+        # against the cache size limit. The cache dir is emptied in place with
+        # find -delete and refilled — no recursive remove of a computed path.
+        if: steps.fuzz.outputs.exit == '0'
+        env:
+          HARNESS_NAME: ${{ matrix.harness }}
+        run: |
+          set -euo pipefail
+          cache_dir="fuzz/corpus-cache/${HARNESS_NAME}"
+          [ -d "$cache_dir" ] || exit 0
+          min="$(mktemp -d)"
+          ./fuzz/out/${HARNESS_NAME} -merge=1 "$min" "$cache_dir"
+          find "$cache_dir" -mindepth 1 -delete
+          cp -a "$min/." "$cache_dir/"
+
+      - name: Save corpus cache
+        # always() so a crash night (the fuzz step exits 1 and fails the job)
+        # still persists what was discovered. The combined actions/cache
+        # post-save is skipped after a failed step; save-always is deprecated
+        # and does not run, so restore and save are kept as separate actions.
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus-cache/${{ matrix.harness }}
+          key: fuzz-corpus-${{ matrix.harness }}-${{ github.run_id }}
 
       - name: Upload artefacts
         if: always()
