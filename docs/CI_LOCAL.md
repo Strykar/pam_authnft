@@ -169,3 +169,5 @@ Makefile                   audit / audit-container / test-packet-match / install
 - The container image ships no sshd, so 10.25 runs only its pamtester
   control arm there and skips the sshd loopback arm; the full stage needs
   a host with sshd (any OpenSSH >= 9.8, for PAMServiceName).
+
+<!-- throwaway: proves the CIFuzz guard fires on a docs-only PR; never merged -->
