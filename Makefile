@@ -31,6 +31,7 @@ TARGET              = pam_authnft.so
 TEST_BIN            = authnft_test
 TEST_VALIDATOR      = test_nft_validator
 TEST_UTIL_VALIDATOR = test_util_validators
+TEST_PEER_LOOKUP    = test_peer_lookup
 OBJ_DIR             = obj
 
 OBJS = $(OBJ_DIR)/audit.o           \
@@ -62,9 +63,10 @@ $(TARGET): $(OBJS)
 # Includes the differential-oracle harness (Phase 4.1 of the security plan)
 # which cross-validates the small parsers against an independent Python
 # implementation. Catches logic bugs that ASan-class fuzzing cannot find.
-test: test-symbols test-oracle $(TEST_BIN) $(TEST_VALIDATOR) $(TEST_UTIL_VALIDATOR)
+test: test-symbols test-oracle $(TEST_BIN) $(TEST_VALIDATOR) $(TEST_UTIL_VALIDATOR) $(TEST_PEER_LOOKUP)
 	./$(TEST_VALIDATOR)
 	./$(TEST_UTIL_VALIDATOR)
+	./$(TEST_PEER_LOOKUP)
 	./$(TEST_BIN)
 
 # Invariant guard #7: exported symbols must be exactly the two PAM entry points.
@@ -148,6 +150,16 @@ $(TEST_UTIL_VALIDATOR): tests/test_util_validators.c src/util_validators.c inclu
 	    -fsanitize=address,undefined -fno-omit-frame-pointer \
 	    tests/test_util_validators.c src/util_validators.c \
 	    -o $@
+
+# peer_parse_diag_chunk's listen-port filter (rhost_policy=kernel): picks the
+# inbound server socket over an outbound one the session also holds. Built with
+# -DFUZZ_BUILD to drop `static`, same mechanism the libFuzzer harnesses use.
+# The test is a real gate: remove the filter in src/peer_lookup.c and it fails.
+$(TEST_PEER_LOOKUP): tests/test_peer_lookup.c src/peer_lookup.c include/authnft.h
+	$(CC) -Wall -Wextra -O0 -g -Iinclude -D_GNU_SOURCE -DFUZZ_BUILD \
+	    -fsanitize=address,undefined -fno-omit-frame-pointer \
+	    tests/test_peer_lookup.c src/peer_lookup.c \
+	    -o $@ -lpam
 
 # Integration tests — requires root (pamtester, nftables, systemd, valgrind).
 # Runs the full session open/close cycle against the live system.
@@ -648,7 +660,7 @@ fuzz-coverage-gate:
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
 clean:
-	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
+	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(TEST_PEER_LOOKUP) $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
 
 distclean: clean
 	@if sudo nft list tables 2>/dev/null | grep -q "inet authnft"; then \

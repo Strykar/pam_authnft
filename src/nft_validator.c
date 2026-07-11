@@ -232,8 +232,11 @@ int validate_fragment_buf(pam_handle_t *pamh, const char *path,
 
     /* Final statement: no trailing separator, or an unbalanced '{' that
      * never closed. Check it regardless of depth so a trailing bad verb
-     * cannot hide behind a missing '}'. */
-    if (!in_comment && has_content &&
+     * cannot hide behind a missing '}'. Do not gate on in_comment: a real
+     * verb before a trailing '#' comment on an unterminated last line still
+     * needs checking, and has_content stays 0 for a comment-only tail, so a
+     * pure trailing comment is not spuriously validated. */
+    if (has_content &&
         check_statement(pamh, path, stmt_lineno, stmt, end) < 0)
         return -1;
 
@@ -323,7 +326,7 @@ char *substitute_placeholders(const char *src, size_t src_len,
              * — each source byte is budgeted `ratio`, which is >= its own
              * worst-case expansion, so no write can exceed the buffer. Kept as
              * defense in depth against a future ratio-math bug. Honored by
-             * ci/fuzz-coverage-gate.sh (stock llvm-cov ignores these markers). */
+             * ci/fuzz-coverage-gate.py (stock llvm-cov ignores these markers). */
             if (wi + 1 >= max_expand) {
                 free(out);
                 return NULL;

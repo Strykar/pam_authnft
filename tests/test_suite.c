@@ -353,10 +353,11 @@ static void run_inodes_cap_test(void) {
     printf("[PASS] cap honored (%d inodes, truncated=1)\n", n);
 }
 
-/* Stage 12: session_file_write writes a 0640 root-owned JSON file, group
- * authnft when that group exists and root otherwise. The group-absent
- * degradation (group readers then get EACCES) is a packaging-regression
- * case no other test pins. Needs root to verify ownership. */
+/* Stage 12: session_file_write writes a 0640 root:root JSON file. The file
+ * carries claims_tag, so it must not be readable by the authnft group — that
+ * group is the monitored-subject population, and group-readability would leak
+ * one subject's claims to another. The assertions below pin uid == 0 AND
+ * gid == 0. Needs root to verify ownership. */
 static void run_session_file_perms_test(void) {
     printf("[STAGE 12] session_file_write permission contract...\n");
     if (geteuid() != 0) { printf("[SKIP] needs root to verify ownership.\n"); return; }

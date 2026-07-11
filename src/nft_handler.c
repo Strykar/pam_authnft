@@ -169,10 +169,11 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     DEBUG_PRINT("nft_handler_setup: user=%s cg=%s chain=%s",
                 user, sd->cg_path, sd->chain_name);
 
-    /* authnft group membership was resolved by the caller in the
-     * unsandboxed parent (nft_user_in_authnft_group, from
-     * pam_sm_open_session before the fork) so no NSS backend runs under
-     * the seccomp filter. A non-member never reaches this function. */
+    /* authnft group membership was resolved by the caller in the setup child,
+     * before sandbox_apply (nft_user_in_authnft_group), so no NSS backend runs
+     * under the seccomp filter and its connection state dies with the child
+     * rather than lingering in the sshd monitor that owns the transient scope.
+     * A non-member never reaches this function. */
 
     /* Fragment validation: must exist, be root-owned, and not world-writable. */
     snprintf(user_conf_path, sizeof(user_conf_path), "%s/%s", RULES_DIR, user);

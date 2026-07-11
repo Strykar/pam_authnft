@@ -121,10 +121,56 @@ int main(int argc, char **argv)
     authnft_session_t sd;
     baseline_session(&sd);
     int rc = -999;
+    int verdict = 0;   /* non-zero => a return-code assertion failed */
 
     if (strcmp(scen, "happy") == 0) {
+        /* The call2fail and handleparse cells reuse this scenario with the nft
+         * interposer preloaded (nft_fail.so), which forces call 2 / the handle
+         * parse to fail. So the expected return flips with the interposer: no
+         * interposer => PAM_SUCCESS, interposer => a failure return. Asserting
+         * both directions means every cell now proves it still drives the
+         * return it exists to drive, instead of printing an unread line. */
+        const int forced_fail = getenv("AUTHNFT_NFT_FAIL_ON") != NULL ||
+                                getenv("AUTHNFT_NFT_CORRUPT_HANDLE") != NULL;
         rc = nft_handler_setup(pamh, user, getpid(), &sd, NULL);
-        printf("[happy] setup rc=%d (PAM_SUCCESS=%d)\n", rc, PAM_SUCCESS);
+        printf("[happy] setup rc=%d (PAM_SUCCESS=%d, interposer=%d)\n",
+               rc, PAM_SUCCESS, forced_fail);
+        if (!forced_fail && rc != PAM_SUCCESS) {
+            fprintf(stderr, "[happy] FAIL: expected PAM_SUCCESS (%d)\n",
+                    PAM_SUCCESS);
+            verdict = 1;
+        } else if (forced_fail && rc == PAM_SUCCESS) {
+            fprintf(stderr, "[happy] FAIL: the nft interposer was active but "
+                    "setup succeeded; this cell is not driving its failure "
+                    "return any more\n");
+            verdict = 1;
+        }
+        if (rc == PAM_SUCCESS)
+            nft_handler_cleanup(pamh, user, &sd);
+    } else if (strcmp(scen, "selfheal") == 0) {
+        /* PID recycle onto a leaked session's names: a previous session for
+         * this (user, pid) died without close_session, so its per-session
+         * chain and sets are still in the kernel (only the element carries a
+         * timeout). Call 1 then collides, and the self-heal must reap the
+         * stale state and retry — otherwise the user is fail-closed out of
+         * their own session until an admin intervenes.
+         *
+         * The collision is forced by the interposer (AUTHNFT_NFT_FAIL_ONCE),
+         * which fails call 1 once with an "exists" error. It cannot be staged
+         * by simply running setup twice: `add table`/`add chain`/`add set` are
+         * idempotent in libnftables, so the second setup just succeeds and the
+         * cell would pass even with the self-heal deleted — a test that proves
+         * nothing. Negative control: remove the strstr("exists") branch in
+         * nft_handler.c and this cell fails. */
+        rc = nft_handler_setup(pamh, user, getpid(), &sd, NULL);
+        printf("[selfheal] setup-over-stale rc=%d (PAM_SUCCESS=%d)\n",
+               rc, PAM_SUCCESS);
+        if (rc != PAM_SUCCESS) {
+            fprintf(stderr, "[selfheal] FAIL: call 1 hit stale state and the "
+                    "self-heal did not recover it; a recycled PID would "
+                    "self-lock the user out\n");
+            verdict = 1;
+        }
         if (rc == PAM_SUCCESS)
             nft_handler_cleanup(pamh, user, &sd);
     } else if (strcmp(scen, "truncate") == 0) {
@@ -141,6 +187,14 @@ int main(int argc, char **argv)
         if (rc == PAM_SUCCESS)
             nft_handler_cleanup(pamh, user, &sd);
     } else if (strcmp(scen, "nftfail") == 0) {
+        /* Pre-create a *base* chain under the per-session name. Call 1 fails
+         * with "already exists", which trips the self-heal; the reap deletes
+         * the chain by name and the retry then hits the second collision the
+         * base chain's hook leaves behind, so setup still fails. The point of
+         * this cell is the call-1-failure return and its frag_buf free, so
+         * assert it: if a change ever makes this path succeed, the scenario is
+         * silently no longer driving the return it claims to
+         * (the `selfheal` cell covers the recoverable case). */
         int crc = precreate_conflict(sd.chain_name);
         if (crc != 0)
             fprintf(stderr,
@@ -149,8 +203,12 @@ int main(int argc, char **argv)
                     crc);
         rc = nft_handler_setup(pamh, user, getpid(), &sd, NULL);
         printf("[nftfail] setup rc=%d (expect non-SUCCESS)\n", rc);
-        if (rc == PAM_SUCCESS)
+        if (rc == PAM_SUCCESS) {
+            fprintf(stderr, "[nftfail] FAIL: setup succeeded; this cell no "
+                    "longer drives the call-1-failure return\n");
+            verdict = 1;
             nft_handler_cleanup(pamh, user, &sd);
+        }
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scen);
         pam_end(pamh, PAM_SUCCESS);
@@ -158,7 +216,10 @@ int main(int argc, char **argv)
     }
 
     pam_end(pamh, PAM_SUCCESS);
-    /* Exit 0: the leak/UB verdict is owned by the sanitizer's atexit
-     * check (exitcode set via ASAN_OPTIONS/UBSAN_OPTIONS by the harness). */
-    return 0;
+    /* The leak/UB verdict is owned by the sanitizer's atexit check (exitcode
+     * set via ASAN_OPTIONS/UBSAN_OPTIONS by the harness), which overrides this
+     * on a leak. `verdict` adds the return-code verdict on top: a scenario
+     * that no longer produces the nft_handler_setup return it exists to drive
+     * now fails the audit instead of printing an unread line. */
+    return verdict;
 }

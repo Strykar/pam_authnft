@@ -122,7 +122,7 @@ run_scen() {
     if [ "$rc" -eq 0 ]; then
         ok "$label: no leak, no UB"
     else
-        bad "$label: sanitizer flagged a leak or UB (exit $rc)"
+        bad "$label: leak, UB, or unexpected setup return code (exit $rc)"
     fi
     nft delete table inet authnft 2>/dev/null || true
 }
@@ -133,12 +133,16 @@ run_scen() {
 #   nftfail      call-1-failure return (bare: the cgroup is absent)
 #   call2fail    call-2 (jump-rule) failure return, via the nft interposer
 #   handleparse  handle-parse failure return, via the nft interposer
+#   selfheal     PID-recycle onto a leaked session's names: the interposer
+#                fails call 1 once as "exists", the stale state is reaped, and
+#                the retry must succeed (else the user self-locks out)
 # call2fail/handleparse need call 1 to succeed first, hence scope=yes.
 run_scen happy       happy    yes
 run_scen truncate    truncate no
 run_scen nftfail     nftfail  no
 run_scen call2fail   happy    yes nft_fail.so "AUTHNFT_NFT_FAIL_ON=jump"
 run_scen handleparse happy    yes nft_fail.so "AUTHNFT_NFT_CORRUPT_HANDLE=1"
+run_scen selfheal    selfheal yes nft_fail.so "AUTHNFT_NFT_FAIL_ONCE=1"
 
 # --- real lifecycle under valgrind (production .so via pamtester) ---
 # The verdict is valgrind's leak report, NOT pamtester's own exit code:

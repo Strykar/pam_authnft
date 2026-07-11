@@ -240,8 +240,9 @@ allocation); the empty-placeholder check, which never fires because the harness
 passes the production placeholder strings; the `src_len * ratio` overflow
 guard, unreachable because a fuzz input cannot be `SIZE_MAX`-scale; and the
 malloc-failure guard, which libFuzzer does not exercise (audit/malloc_fail.so
-covers it separately). What remains is the reachable state machine and matcher,
-which the committed corpus drives above the bar.
+can drive it by hand, but that tool is manual and no gate runs it, so this
+guard is untested rather than covered). What remains is the reachable state
+machine and matcher, which the committed corpus drives above the bar.
 
 Per-source-file region coverage (illustrating how much codebase is
 *untouched* by any harness):

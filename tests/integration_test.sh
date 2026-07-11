@@ -947,15 +947,24 @@ NFT
 chown root:root "$FRAGMENT"
 chmod 644 "$FRAGMENT"
 
-T1025=$(date '+%Y-%m-%d %H:%M:%S')
-sleep 1.1   # journalctl --since has one-second granularity
+# Slice the journal by an exact cursor, not a wall-clock second. `journalctl
+# --since` is second-granular, so the control arm's fallback line below could
+# land in the same second as the sshd arm's window start and fail that arm
+# spuriously. A cursor is an exact position and --after-cursor is exclusive.
+journal_since_cursor() {   # <cursor> <pattern>
+    if [[ -n "$1" ]]; then
+        journalctl -q --after-cursor "$1" 2>/dev/null | grep -q "$2"
+    else
+        journalctl -q 2>/dev/null | grep -q "$2"
+    fi
+}
+K_CUR_CTL=$(journalctl -q -n1 --show-cursor 2>/dev/null | sed -n 's/^-- cursor: //p')
 if ! pamtester -I rhost=localhost authnft_kernel "$TEST_USER" \
         open_session close_session </dev/null >/dev/null 2>&1; then
     rm -f "$PAM_KERNEL_CONF"
     fail "10.25: control arm: open+close failed under rhost_policy=kernel"
 fi
-if ! journalctl --since "$T1025" 2>/dev/null \
-        | grep -q 'kernel peer lookup failed for pid'; then
+if ! journal_since_cursor "$K_CUR_CTL" 'kernel peer lookup failed for pid'; then
     rm -f "$PAM_KERNEL_CONF"
     fail "10.25: control arm: 'kernel peer lookup failed' line missing (a socketless caller must take the fallback path)"
 fi
@@ -1012,10 +1021,15 @@ EOF
     if ! "$SSHD_BIN" -t -f "$K_DIR/sshd_config" >/dev/null 2>&1; then
         pass "10.25: [SKIP] control arm passed; sshd rejects the config (PAMServiceName needs OpenSSH >= 9.8)"
     else
-        T1025B=$(date '+%Y-%m-%d %H:%M:%S')
-        sleep 1.1
+        K_CUR_SSH=$(journalctl -q -n1 --show-cursor 2>/dev/null | sed -n 's/^-- cursor: //p')
         "$SSHD_BIN" -f "$K_DIR/sshd_config" -E "$K_DIR/sshd.log"
-        sleep 0.4
+        # Poll for the pid file rather than assuming a fixed 0.4s is enough: on
+        # a loaded host sshd can write it later, and the old fixed sleep turned
+        # that into a bogus "sshd refused to start" [SKIP] that hid the arm.
+        for _ in $(seq 1 25); do
+            [[ -s "$K_PID_FILE" ]] && break
+            sleep 0.2
+        done
         if [[ ! -s "$K_PID_FILE" ]]; then
             echo "sshd failed to start; log tail:" >&2
             tail -20 "$K_DIR/sshd.log" >&2
@@ -1053,12 +1067,10 @@ EOF
                 cat "$K_DIR/during.txt" >&2
                 fail "10.25: sshd arm: no v4 element with 127.0.0.1 during the session"
             fi
-            if journalctl --since "$T1025B" 2>/dev/null \
-                    | grep -q 'kernel peer lookup failed for pid'; then
+            if journal_since_cursor "$K_CUR_SSH" 'kernel peer lookup failed for pid'; then
                 fail "10.25: sshd arm: kernel lookup fell back under sshd (monitor did not resolve the peer)"
             fi
-            if journalctl --since "$T1025B" 2>/dev/null \
-                    | grep -q 'using kernel-derived peer'; then
+            if journal_since_cursor "$K_CUR_SSH" 'using kernel-derived peer'; then
                 pass "10.25: kernel peer resolved in the monitor (PAM_RHOST was a hostname; v4 element only reachable via sock_diag)"
             else
                 pass "10.25: kernel peer resolved in the monitor (PAM_RHOST already an IP; proven by v4 element + no fallback line)"

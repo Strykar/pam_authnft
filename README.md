@@ -14,13 +14,13 @@ Linux has no built-in way to bind packet filter rules to an authenticated
 user session and revoke them at logout. pam_authnft fills that gap. Rules
 are removed by `close_session` at logout via the per-session state stored
 through `pam_set_data`. If `close_session` never runs at all — daemon
-crash, OOM kill, kernel panic, hard reset — two backstops apply: the
-session's set element carries a 24-hour timeout, so it stops matching
-traffic within a day; and the per-session chain, sets, and jump rule
-(which have no timeout of their own) are reaped either by the next
-`close_session` for that session or, if the PID recycles onto a leaked
-session's names, by the self-heal that reclaims the stale state at the
-next `open_session`.
+crash, OOM kill, kernel panic, hard reset — the session's set element
+carries a 24-hour timeout, so it stops matching traffic within a day.
+The per-session chain, sets, and jump rule have no timeout of their own.
+Nothing reaps them on a timer: that session's `close_session` is never
+coming, so they persist until either a later login's PID recycles onto
+the leaked names — which trips the self-heal that reclaims the stale
+state at `open_session` — or an administrator removes them by hand.
 
 OpenBSD's pf has had this for years — named anchors loaded per-session via
 pfctl, torn down when the session ends. pam_authnft brings the same model
