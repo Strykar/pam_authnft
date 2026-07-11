@@ -33,6 +33,21 @@
 
 static int (*real_run)(void *, const char *);
 static const char *(*real_getout)(void *);
+static const char *(*real_geterr)(void *);
+
+/* AUTHNFT_NFT_FAIL_ONCE=1 drives the call-1 self-heal (PID recycle onto a
+ * leaked session's names). It fails the FIRST call-1 command once and makes
+ * the next error-buffer read report an "exists" collision, which is what a
+ * leftover per-session chain/set from a killed session produces. The retry the
+ * self-heal issues then passes through to the real libnftables and succeeds.
+ *
+ * This has to be forced: re-running nft_handler_setup by hand does NOT
+ * reproduce the collision, because `add table` / `add chain` / `add set` are
+ * idempotent in libnftables, so a second identical setup just succeeds. A
+ * scenario built that way passes with the self-heal deleted (verified), i.e.
+ * it proves nothing. */
+static int fail_once_done;
+static int fake_exists_err;
 
 int nft_run_cmd_from_buffer(void *ctx, const char *buf)
 {
@@ -45,7 +60,27 @@ int nft_run_cmd_from_buffer(void *ctx, const char *buf)
                     fail_on);
         return 1; /* libnftables returns non-zero on failure */
     }
+    /* Call 1 is the only command that creates the per-session sets. */
+    const char *once = getenv("AUTHNFT_NFT_FAIL_ONCE");
+    if (once && *once && !fail_once_done && buf && strstr(buf, "add set inet")) {
+        fail_once_done = 1;
+        fake_exists_err = 1;
+        if (getenv("AUTHNFT_NFT_FAIL_VERBOSE"))
+            fprintf(stderr, "[nft_fail] failing call 1 once as 'exists'\n");
+        return 1;
+    }
     return real_run(ctx, buf);
+}
+
+const char *nft_ctx_get_error_buffer(void *ctx)
+{
+    if (fake_exists_err) {
+        fake_exists_err = 0;   /* one-shot: the retry sees the real buffer */
+        return "Error: Could not process rule: File exists\n";
+    }
+    if (!real_geterr)
+        real_geterr = dlsym(RTLD_NEXT, "nft_ctx_get_error_buffer");
+    return real_geterr(ctx);
 }
 
 const char *nft_ctx_get_output_buffer(void *ctx)
