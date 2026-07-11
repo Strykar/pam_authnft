@@ -74,6 +74,17 @@ echo "== in-tree paths referenced in docs =="
 PATH_RE='(\.github/workflows/[A-Za-z0-9_.-]+\.yml|ci/[A-Za-z0-9_.-]+\.(sh|py)|tests/[A-Za-z0-9_./-]+\.(sh|c)|audit/[A-Za-z0-9_.-]+\.(sh|c|so)|src/[A-Za-z0-9_.-]+\.c|include/[A-Za-z0-9_.-]+\.h|data/[A-Za-z0-9_.-]+)'
 for f in "${DOCS[@]}"; do
     for p in $(grep -oE "$PATH_RE" "$f" | strip_punct | sort -u); do
+        # A .so is a BUILD ARTIFACT, absent from a clean checkout. Docs name
+        # them (audit/malloc_fail.so is LD_PRELOADed by name), so check that the
+        # SOURCE that produces it exists instead. Checking for the .so itself
+        # passes only on a dirty tree that happens to have been built — which is
+        # precisely how this gate first shipped green locally and red in CI.
+        case "$p" in
+            *.so) [ -e "${p%.so}.c" ] && continue
+                  note DRIFT "$f references '$p' — no ${p%.so}.c to build it from"
+                  echo x >> /tmp/.docsdrift.$$
+                  continue ;;
+        esac
         [ -e "$p" ] && continue
         note DRIFT "$f references '$p' — no such file"
         echo x >> /tmp/.docsdrift.$$
