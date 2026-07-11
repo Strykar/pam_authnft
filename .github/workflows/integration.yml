@@ -20,7 +20,7 @@ jobs:
     # The container shares the runner's kernel, so the `socket cgroupv2 level 2`
     # packet-match (integration stage 10.11) is validated against the runner
     # image's kernel, not a pinned matrix. The kernel matrix lives in
-    # audit-vm.yml.
+    # the container tier.
     #
     # Cadence: per PR (plus dispatch + nightly). The systemd-in-podman boot was
     # proven green on a hosted runner before promoting this to a PR gate; that
