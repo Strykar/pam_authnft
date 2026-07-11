@@ -96,13 +96,22 @@ make install-hooks    # route git hooks at .githooks/; pre-commit runs tier 1
 Kernel matrix (tier 2):
 
 ```sh
-KERNELS="host v6.12 v6.6" make audit-vm   # vng downloads upstream kernels
+make audit-vm-matrix                      # host v6.8 v5.18 v6.12 latest
+KERNELS="host v6.8 latest" make audit-vm  # or pick your own set
 ```
 
-The `host` kernel needs nothing extra. Upstream kernels (`v6.12` etc.) are
-fetched by virtme-ng as Ubuntu `.deb`s and need `dpkg` on the host to
-unpack them; on Arch, `pacman -S dpkg` first (the host-kernel audit does
-not require it).
+The default set maps to deployments: v6.8 (Ubuntu 24.04 LTS base), v5.18
+(the upstream floor: the oldest mainline where socket-cgroupv2 matches on
+the INPUT hook, commit 05ae2fba821c), v6.12 (RHEL 10 base, upstream LTS),
+plus the host kernel and `latest` (newest tagged mainline build, resolved
+at run time by ci/vng-audit.sh — tracks Linus's tree). Vanilla 5.14 (the
+RHEL 9 base) predates the INPUT fix and fails packet-match — this matrix
+found that — so RHEL 9 coverage cannot be approximated by a mainline
+build; on a real RHEL 9 host (whose kernel carries backports) run
+`make test-packet-match` to verify. The `host` kernel needs nothing
+extra. Upstream kernels are fetched by virtme-ng as Ubuntu mainline
+`.deb`s and need `dpkg` on the host to unpack them; on Arch,
+`pacman -S dpkg` first (the host-kernel audit does not require it).
 
 commit-time gate (after `make install-hooks`):
 
