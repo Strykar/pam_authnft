@@ -1,0 +1,79 @@
+# Decide whether a pull request can affect the fuzzers.
+#
+# CIFuzz and the coverage gate build the harnesses from the C sources and the
+# fuzz/ tree and run them; a change that touches none of that cannot produce a
+# new crash or move coverage, so there is nothing to gain by running them. This
+# reports whether the PR is fuzz-relevant so the caller can skip the expensive
+# steps while the job still runs and reports its check (a required check held
+# back by a paths filter never reports, which blocks the PR forever).
+#
+# Fails safe: a file is treated as irrelevant only when it is provably so
+# (documentation, data/ runtime config, or a workflow file other than the two
+# that define the fuzz jobs). Everything else — src/, include/, fuzz/, Makefile,
+# tests/, ci/, cifuzz.yml, fuzz-coverage.yml, and any path nobody anticipated —
+# is relevant, so an unfamiliar change runs the fuzzers rather than skipping them.
+#
+# Subsumes the docs-only guard for these two jobs: a docs-only diff is also
+# fuzz-irrelevant, so this replaces it rather than stacking with it.
+#
+# Requires the caller to check out with fetch-depth: 0 so the base commit exists.
+
+name: fuzz-scope
+description: True when a pull request can affect the fuzz harnesses or their coverage.
+
+outputs:
+  relevant:
+    description: "'true' when the PR touches something the fuzzers depend on"
+    value: ${{ steps.detect.outputs.relevant }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+
+        # A file that cannot change a fuzz outcome. The two workflows that
+        # define the fuzz jobs are deliberately excluded from the workflow
+        # arm below (listed first, marked relevant), so editing them re-runs
+        # the fuzzers to validate the change.
+        irrelevant() {
+            case "$1" in
+                .github/workflows/cifuzz.yml|.github/workflows/fuzz-coverage.yml)
+                    return 1 ;;
+                docs/*|*.md|.well-known/*|LICENSE)                 return 0 ;;
+                data/*)                                            return 0 ;;
+                .github/workflows/*.yml|.github/workflows/*.yaml)  return 0 ;;
+                .github/dependabot.yml|.github/ISSUE_TEMPLATE/*)   return 0 ;;
+                *)                                                 return 1 ;;
+            esac
+        }
+
+        # No PR to diff against on push, dispatch or cron: run the fuzzers.
+        if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+        fi
+
+        changed=$(git diff --name-only "$BASE_SHA" HEAD)
+        if [ -z "$changed" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+        fi
+
+        while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! irrelevant "$f"; then
+                echo "relevant=true" >> "$GITHUB_OUTPUT"
+                echo "Fuzz-relevant change ($f). Running the fuzzers."
+                exit 0
+            fi
+        done <<< "$changed"
+
+        echo "relevant=false" >> "$GITHUB_OUTPUT"
+        echo "::notice::No fuzz-relevant files changed. The fuzz steps in this job are skipped; the check still reports."
+        printf '%s\n' "$changed" | sed 's/^/  /'
