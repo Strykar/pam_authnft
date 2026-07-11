@@ -18,11 +18,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0   # the scope probe below diffs against the PR base
+
+      - id: scope
+        uses: ./.github/actions/docs-only
       - name: Install dependencies
+        if: steps.scope.outputs.result != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm pkg-config \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
       - name: Per-function fuzz-coverage gate
+        if: steps.scope.outputs.result != 'true'
         run: make fuzz-coverage-gate
