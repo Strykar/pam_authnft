@@ -2,6 +2,10 @@ obj/
 pam_authnft.so
 authnft_test
 authnft_test.d
+test_nft_validator
+test_util_validators
+test_peer_lookup
+tests/oracle/oracle_runner
 rules.tmp
 trace.log
 trace-claims.log
@@ -19,3 +23,10 @@ docs/audit_scope.txt
 audit/nft_fault_driver
 audit/malloc_fail.so
 audit/nft_fail.so
+
+# Fuzz coverage build outputs (make fuzz-coverage / fuzz-coverage-gate).
+# The committed corpus lives in fuzz/corpus/; everything below is generated.
+fuzz/coverage/
+fuzz/out/
+*.profraw
+*.profdata

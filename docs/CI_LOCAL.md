@@ -31,14 +31,12 @@ returns the happy-path integration suite never takes.
 |---|---|---|---|
 | 0 | host / GitHub-hosted | existing workflows | build, cppcheck, CodeQL, unit (non-root), fuzz, mutation, ASan/UBSan build-link + the `sanitized-tests` unit runtime under ASan/UBSan/LSan, reproducible-build check, and the THIRD_PARTY linked-library drift gate |
 | 1 | booted-systemd container (rootful, isolated) | `make audit` / `make test-integration-container`; gated per-PR and nightly by `integration.yml` | unit suite (seccomp SIGSYS enforcement) + all five nft_handler_setup returns under ASan/LSan + real lifecycle under valgrind + the 25-stage integration suite; **catches the frag_buf class** |
-| 2 | virtme-ng microVM (real kernel, KVM) | `make audit-vm` / `make audit-vm-matrix`; gated nightly by `audit-vm.yml` (hosted runners carry `/dev/kvm` since 2024) | the socket-cgroupv2 packet-match invariants (`tests/packet_match_headless.sh`) plus the A+C audit, under a real, pinnable kernel + real cgroup hierarchy, swept across a kernel matrix. The full integration suite (Part B) is still excluded here (host coupling) |
 | 3 | Coverity weekly + local cov-build | (existing) | path-sensitive inter-procedural static backstop |
 | M | Alpine container (musl libc) | `make test-musl` | unit suite built against musl; catches libc-specific seccomp allowlist gaps (the open/readv/writev class) the glibc tiers cannot |
 
-Both tier 1 and tier 2 are **disposable and isolated** — they install a PAM
-module and rewrite nftables, which must never happen on the dev host. The
-container mutates nothing on the host; the microVM overlays the host rootfs
-so its `groupadd`/`useradd`/`nft` writes are ephemeral.
+Tier 1 is **disposable and isolated** — it installs a PAM module and rewrites
+nftables, which must never happen on the dev host. The container mutates
+nothing on the host.
 
 Tier M is orthogonal to the privilege tiers. The seccomp allowlist in
 `src/sandbox.c` is derived from glibc syscall traces, and musl routes
@@ -87,31 +85,23 @@ That is the proof the green is real.
 
 ```sh
 make audit            # tier 1: container fault matrix + valgrind lifecycle
-make audit-vm         # tier 2: same audit under a real kernel (vng)
-make audit-all        # tiers 1 + 2
 make test-musl        # tier M: unit suite built against musl (Alpine)
 make install-hooks    # route git hooks at .githooks/; pre-commit runs tier 1
 ```
 
-Kernel matrix (tier 2):
+Kernel packet-match check (run this on the target host):
 
 ```sh
-make audit-vm-matrix                      # host v6.8 v5.18 v6.12 latest
-KERNELS="host v6.8 latest" make audit-vm  # or pick your own set
+sudo make test-packet-match
 ```
 
-The default set maps to deployments: v6.8 (Ubuntu 24.04 LTS base), v5.18
-(the upstream floor: the oldest mainline where socket-cgroupv2 matches on
-the INPUT hook, commit 05ae2fba821c), v6.12 (RHEL 10 base, upstream LTS),
-plus the host kernel and `latest` (newest tagged mainline build, resolved
-at run time by ci/vng-audit.sh — tracks Linus's tree). Vanilla 5.14 (the
-RHEL 9 base) predates the INPUT fix and fails packet-match — this matrix
-found that — so RHEL 9 coverage cannot be approximated by a mainline
-build; on a real RHEL 9 host (whose kernel carries backports) run
-`make test-packet-match` to verify. The `host` kernel needs nothing
-extra. Upstream kernels are fetched by virtme-ng as Ubuntu mainline
-`.deb`s and need `dpkg` on the host to unpack them; on Arch,
-`pacman -S dpkg` first (the host-kernel audit does not require it).
+The module needs `socket cgroupv2` to match on an INPUT-hooked chain, which is
+commit 05ae2fba821c, not a version. A kernel in [5.13, 5.18) that lacks it
+accepts the rule and never matches, so a session's rules silently never apply.
+The fix is Fixes-tagged, so stable branches carry it (5.15.y does, hence Ubuntu
+22.04 is fine) while the frozen mainline tags of those versions do not. No
+version check distinguishes these; this target drives the real match and exits
+non-zero if the kernel accepts the rule but never matches on it.
 
 commit-time gate (after `make install-hooks`):
 
@@ -120,7 +110,6 @@ git commit ...                       # code commits run tier-1 first; doc-only c
 AUTHNFT_SKIP_AUDIT=1 git commit ...  # skip once (use sparingly)
 git push                             # no re-run by default
 AUTHNFT_AUDIT_ON_PUSH=1 git push     # opt-in: re-run tier-1 at push
-AUTHNFT_AUDIT_VM=1       git push    # opt-in: also run tier-2 microVM
 ```
 
 The gate is **pre-commit**: every commit that touches `src/ include/ audit/
@@ -135,13 +124,12 @@ audit/nft_fault_driver.c   fault driver (ASan/UBSan), drives the error returns
 audit/nft_fail.c           LD_PRELOAD libnftables interposer (call-2 / handle-parse)
 audit/malloc_fail.c        LD_PRELOAD fail-Nth-allocation interposer (manual)
 audit/run-all.sh           orchestrator: Part A unit/seccomp + Part C fault matrix
-audit/run-audit.sh         in-substrate orchestrator (container + vng)
-ci/vng-audit.sh            tier-2 microVM runner (host kernel + matrix)
+audit/run-audit.sh         in-substrate orchestrator (container)
 ci/musl-test.sh            tier-M musl build + unit suite (Alpine container)
 .githooks/pre-commit       runs tier-1 audit on every code commit
-.githooks/pre-push         opt-in tier-1/tier-2 at push
+.githooks/pre-push         opt-in tier-1 at push
 Containerfile              'audit' workflow case
-Makefile                   audit / audit-container / audit-vm / audit-all / install-hooks
+Makefile                   audit / audit-container / test-packet-match / install-hooks
 ```
 
 ## Honest coverage boundaries
@@ -159,8 +147,7 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
   closed). It is NOT wired into the every-commit audit gate: inside the
   `make audit` Part B path it is OPT-IN (AUDIT_RUN_INTEGRATION=1, off by
   default) because that substrate has host-environment coupling (umask,
-  file ownership, a degraded systemd in the microVM) the dedicated
-  container avoids. Wiring it into Part B is follow-on work; run it via
+  file ownership) the dedicated container avoids. Wiring it into Part B is follow-on work; run it via
   `make test-integration-container` / `sudo make test-integration`.
 - `audit/malloc_fail.so` (fail-Nth-allocation interposer) is a **manual**
   targeted tool, not part of the automated gate: a blind sweep fails
@@ -171,13 +158,14 @@ Makefile                   audit / audit-container / audit-vm / audit-all / inst
   valgrind and seccomp tangle. The filter is audited separately by the
   `trace` workflow and the negative seccomp tests.
 - Tier 1 shares the host kernel under a nested cgroup namespace, so the
-  socket-cgroupv2 packet-classification stages (integration 10.11-10.13)
-  that need a real cgroup hierarchy are a tier-2 concern. Their kernel
-  behaviour is extracted into `tests/packet_match_headless.sh` — systemd +
-  nft + ncat only, no pamtester/PAM/sshd — which tier 2 runs in each guest
-  kernel, so the allowed/disallowed match, the alloc-time invariant, and
-  per-session isolation are proven across the kernel matrix. Exit 77 there
-  means the guest kernel lacks socket-cgroupv2 (skipped, not failed).
+  socket-cgroupv2 packet-classification stages (integration 10.11-10.13) need
+  a real cgroup hierarchy. Their kernel behaviour is extracted into
+  `tests/packet_match_headless.sh` — systemd + nft + ncat only, no
+  pamtester/PAM/sshd — which is run by hand on a real host via
+  `sudo make test-packet-match`. That is the check that tells an admin whether
+  their kernel actually matches `socket cgroupv2` on INPUT (commit
+  05ae2fba821c; see the requirements table in README.md), which no version
+  check can answer.
 - The container image ships no sshd, so 10.25 runs only its pamtester
   control arm there and skips the sshd loopback arm; the full stage needs
   a host with sshd (any OpenSSH >= 9.8, for PAMServiceName).

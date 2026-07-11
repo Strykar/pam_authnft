@@ -5,15 +5,13 @@
 # so by default push does not re-run it. This hook is an opt-in extra:
 #
 #   AUTHNFT_AUDIT_ON_PUSH=1 git push   # re-run tier-1 before pushing
-#   AUTHNFT_AUDIT_VM=1       git push   # also run the tier-2 microVM
 #
 # Enable hooks with: make install-hooks
 set -uo pipefail
 
 run_tier1="${AUTHNFT_AUDIT_ON_PUSH:-0}"
-run_tier2="${AUTHNFT_AUDIT_VM:-0}"
 
-if [ "$run_tier1" != 1 ] && [ "$run_tier2" != 1 ]; then
+if [ "$run_tier1" != 1 ]; then
     exit 0
 fi
 
@@ -23,9 +21,5 @@ cd "$ROOT" || exit 1
 if [ "$run_tier1" = 1 ]; then
     echo "pre-push: AUTHNFT_AUDIT_ON_PUSH=1 — running tier-1 audit ..." >&2
     make audit || { echo "pre-push: tier-1 audit FAILED — push blocked." >&2; exit 1; }
-fi
-if [ "$run_tier2" = 1 ]; then
-    echo "pre-push: AUTHNFT_AUDIT_VM=1 — running tier-2 microVM audit ..." >&2
-    make audit-vm || { echo "pre-push: tier-2 audit FAILED — push blocked." >&2; exit 1; }
 fi
 exit 0

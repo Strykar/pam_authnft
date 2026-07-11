@@ -40,5 +40,6 @@ sshd's privsep monitor. Review with that threat model in mind.
 Workflows are hash-pinned and least-privilege (`permissions: contents:
 read`). The fuzz-coverage gate replays only the committed corpus; corpus
 files under `fuzz/corpus/*/seed_*` are deterministic fixtures, not noise.
-virtme-ng microVMs boot on the runner's rootfs, so new tool dependencies
-in tier-2 scripts must be added to `audit-vm.yml`'s apt install list.
+`tests/packet_match_headless.sh` (via `make test-packet-match`) is how an
+admin verifies their kernel really matches `socket cgroupv2` on INPUT; it is
+run by hand on the target host, not in CI.

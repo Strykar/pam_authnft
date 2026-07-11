@@ -307,12 +307,23 @@ is a documented kernel or userspace primitive.
 
 ### Requirements
 
-- Linux kernel >= 5.18, cgroupv2 unified hierarchy. The `socket cgroupv2`
-  expression was added in 5.13 but did not match on INPUT-hooked chains
-  (which this module uses) until 5.18 (commit 05ae2fba821c, "netfilter:
-  nft_socket: make cgroup match work in input too"). Older distro kernels
-  with that fix backported also work — RHEL 9's 5.14-based kernel likely
-  qualifies; verify on the target host with `make test-packet-match`.
+- Linux kernel with a cgroupv2 unified hierarchy **and** a `socket cgroupv2`
+  match that works on INPUT-hooked chains. That is a patch, not a version:
+  commit 05ae2fba821c ("netfilter: nft_socket: make cgroup match work in
+  input too"). It is `Fixes:`-tagged, so stable trees carry it, and a version
+  number alone does not tell you whether a given kernel qualifies:
+
+  | Kernel | Status |
+  |---|---|
+  | < 5.13 | unsupported: `socket cgroupv2` does not exist, nftables rejects the rule |
+  | 5.13-5.17 **without** the fix | **silently broken**: the rule loads but never matches, so the session's rules never apply |
+  | any kernel **with** 05ae2fba821c | works. 5.15.y stable carries it, so Ubuntu 22.04 LTS is fine |
+  | >= 5.18 | works (the fix landed in mainline here) |
+
+  The middle row is the dangerous one: it fails silently rather than loudly.
+  So do not infer support from the version. Run `make test-packet-match` on
+  the target host — it drives the real match and exits non-zero if the kernel
+  accepts the rule but never matches on it.
 - systemd with D-Bus
 - nftables >= 1.0.6
 - Build: `gcc`, `make`, `pkg-config`

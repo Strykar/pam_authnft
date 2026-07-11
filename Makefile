@@ -170,9 +170,15 @@ test-integration: $(TEST_BIN)
 	    ./$(TEST_BIN)
 	@sudo chown -R $$(id -u):$$(id -g) . 2>/dev/null; true
 
-# Headless socket-cgroupv2 packet-match invariants on the current kernel.
-# No PAM module, sshd or pamtester — systemd + nft + ncat only, so it runs
-# per guest kernel in the tier-2 matrix (see audit-vm-matrix / ci/vng-audit.sh).
+# Headless socket-cgroupv2 packet-match invariants on the CURRENT kernel.
+# No PAM module, sshd or pamtester — systemd + nft + ncat only.
+#
+# This is how you find out whether a kernel actually works. The module needs
+# `socket cgroupv2` to match on INPUT-hooked chains, which is commit
+# 05ae2fba821c, not a version: kernels in [5.13, 5.18) without it load the rule
+# and then never match on it, so a session's rules silently never apply. No
+# version check can tell you; this does, by driving the real match. Run it on
+# the target host before deploying (see the requirements table in README.md).
 test-packet-match:
 	sudo ./tests/packet_match_headless.sh
 
@@ -279,36 +285,9 @@ audit-container:
 	@mkdir -p $(RESULT_DIR) && echo audit > $(RESULT_DIR)/workflow
 	$(RUN_CONTAINER)
 
-# Tier 2 audit in a real-kernel virtme-ng microVM (optional kernel matrix
-# via KERNELS="host v6.12 ..."). Ephemeral guest; no host mutation.
-audit-vm:
-	./ci/vng-audit.sh
-
-# Multi-kernel packet-match confidence run: tier-2 across a kernel matrix.
-# Each kernel runs tests/packet_match_headless.sh (the socket-cgroupv2
-# invariants, decoupled from the pamtester integration suite so they run
-# headless) plus the A+C audit. This is the one coverage CI cannot gate on
-# arbitrary kernels locally — hosted runners can, since their Ubuntu image
-# has dpkg to unpack vng's downloaded kernels.
-#   - non-host kernels download as Ubuntu .debs and need `dpkg` on the host
-#     to unpack (absent on Arch: `pacman -S dpkg`); without it only
-#     KERNELS=host boots.
-# Default set mirrors audit-vm.yml's deployment rationale: Ubuntu 24.04 LTS
-# base (v6.8), the upstream floor for INPUT-hook socket-cgroupv2 matching
-# (v5.18, commit 05ae2fba821c — vanilla 5.14 predates it and fails), RHEL 10
-# base / upstream LTS (v6.12), and "latest" (newest tagged mainline, resolved
-# by ci/vng-audit.sh). Override with AUDIT_KERNELS="host v6.1 ...".
-# AUDIT_RUN_INTEGRATION is left off: packet-match comes from the headless
-# harness, and Part B still does not survive the microVM's degraded
-# --systemd init.
-AUDIT_KERNELS ?= host v6.8 v5.18 v6.12 latest
-audit-vm-matrix:
-	KERNELS="$(AUDIT_KERNELS)" ./ci/vng-audit.sh
-
-# `make audit` is the local gate: tier 1 (container) by default — the same
-# thing the pre-commit hook runs. `make audit-all` adds the tier-2 microVM.
+# `make audit` is the local gate: tier 1 (container) — the same thing the
+# pre-commit hook runs.
 audit: audit-container
-audit-all: audit-container audit-vm
 
 # Clang static analyzer (scan-build). Path-sensitive; --status-bugs makes
 # it exit non-zero on any analyzer bug. This is the checker that catches
@@ -326,7 +305,7 @@ install-hooks:
 	git config core.hooksPath .githooks
 	@echo "git hooks installed:"
 	@echo "  pre-commit  runs 'make audit' (tier-1) on every code-touching commit"
-	@echo "  pre-push    opt-in: AUTHNFT_AUDIT_ON_PUSH=1 / AUTHNFT_AUDIT_VM=1"
+	@echo "  pre-push    opt-in: AUTHNFT_AUDIT_ON_PUSH=1"
 
 # Software Bill of Materials. On-demand generation via syft, which
 # parses the .so's DT_NEEDED entries plus build metadata. Output is
@@ -670,5 +649,5 @@ distclean: clean
 
 .PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-container \
         test-integration-container test-musl trace trace-container trace-features \
-        audit audit-all audit-container audit-vm audit-vm-matrix \
+        audit audit-container \
         distclean install install-tmpfiles uninstall man install-man

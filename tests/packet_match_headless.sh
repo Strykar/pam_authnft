@@ -2,13 +2,19 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2025 Avinash H. Duduskar
 #
-# Headless kernel packet-match harness for the multi-kernel matrix.
+# Does this kernel actually work? Run it here: `sudo make test-packet-match`.
 #
-# Proves the three kernel invariants pam_authnft relies on, with no PAM
-# module, no sshd, no NSS and no pamtester in the loop — only systemd,
-# nftables and ncat. That decoupling lets a microVM run this once per
-# guest kernel to confirm `socket cgroupv2 level 2 . ip saddr` behaves,
-# which is the property that actually varies across kernel versions.
+# pam_authnft needs `socket cgroupv2` to match on an INPUT-hooked chain. That
+# is a patch, not a version: commit 05ae2fba821c ("netfilter: nft_socket: make
+# cgroup match work in input too"). A kernel in [5.13, 5.18) without it — and
+# the fix is Fixes-tagged, so stable branches DO carry it while the frozen
+# mainline tags do not — will happily accept the rule and then never match on
+# it. The session's rules silently never apply. No version check can tell you
+# that; only driving the real match can, which is what this does.
+#
+# Proves the three kernel invariants the module relies on, with no PAM module,
+# no sshd, no NSS and no pamtester in the loop — only systemd, nftables, ncat
+# and ss:
 #
 #   PM1  allowed source matches, disallowed source does not   (10.11)
 #   PM2  a socket created before cgroup migration never matches (10.12, K10)
@@ -19,12 +25,9 @@
 # fire), so a probe that never generated traffic reads as FAIL, not as a
 # vacuous pass.
 #
-# Exit codes: 0 all invariants verified, 1 an invariant broke, 77 the
-# kernel/nft build rejects the socket-cgroupv2 concat set or rule, so the
-# matrix can tell "feature absent" from "feature broken". Kernels in
-# [5.13, 5.18) accept the rule but never match on INPUT (fixed by
-# 05ae2fba821c, first in v5.18): those FAIL here by design — the README
-# documents v5.18 as the floor, and a floor violation should be loud.
+# Exit codes: 0 all invariants verified, 1 an invariant broke (this is what the
+# silently-broken kernels above produce — loudly), 77 the kernel/nft rejected
+# the socket-cgroupv2 set or rule outright, i.e. the feature is absent (< 5.13).
 set -euo pipefail
 
 RED='\033[1;31m' BLUE='\033[1;34m' YELLOW='\033[1;33m' RESET='\033[0m'
