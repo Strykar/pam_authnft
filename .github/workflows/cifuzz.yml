@@ -20,10 +20,10 @@ jobs:
           fetch-depth: 0   # the scope probe below diffs against the PR base
 
       - id: scope
-        uses: ./.github/actions/docs-only
+        uses: ./.github/actions/fuzz-scope
 
       - name: Install dependencies
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -31,11 +31,11 @@ jobs:
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
 
       - name: Build fuzz targets
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: make fuzz
 
       - name: Fuzz util_is_valid_username + util_normalize_ip (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/username fuzz/crashes
           ./fuzz/out/fuzz_username \
@@ -44,7 +44,7 @@ jobs:
             fuzz/corpus/username/
 
       - name: Fuzz validate_fragment_content (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/fragment fuzz/crashes
           ./fuzz/out/fuzz_fragment \
@@ -53,7 +53,7 @@ jobs:
             fuzz/corpus/fragment/
 
       - name: Fuzz substitute_placeholders (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/substitute_placeholders fuzz/crashes
           ./fuzz/out/fuzz_substitute_placeholders \
@@ -62,7 +62,7 @@ jobs:
             fuzz/corpus/substitute_placeholders/
 
       - name: Fuzz peer_parse_diag_chunk (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/netlink_diag fuzz/crashes
           ./fuzz/out/fuzz_netlink_diag \
@@ -71,7 +71,7 @@ jobs:
             fuzz/corpus/netlink_diag/
 
       - name: Fuzz keyring_sanitize (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/keyring_sanitize fuzz/crashes
           ./fuzz/out/fuzz_keyring_sanitize \
@@ -80,7 +80,7 @@ jobs:
             fuzz/corpus/keyring_sanitize/
 
       - name: Fuzz corr_sanitize_copy (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/correlation_capture fuzz/crashes
           ./fuzz/out/fuzz_correlation_capture \
@@ -89,7 +89,7 @@ jobs:
             fuzz/corpus/correlation_capture/
 
       - name: Fuzz validate_cgroup_path (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/cgroup_path fuzz/crashes
           ./fuzz/out/fuzz_cgroup_path \
@@ -98,7 +98,7 @@ jobs:
             fuzz/corpus/cgroup_path/
 
       - name: Fuzz parse_socket_inode (60s)
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           mkdir -p fuzz/corpus/socket_inode fuzz/crashes
           ./fuzz/out/fuzz_socket_inode \

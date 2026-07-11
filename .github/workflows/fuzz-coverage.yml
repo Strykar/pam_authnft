@@ -22,14 +22,14 @@ jobs:
           fetch-depth: 0   # the scope probe below diffs against the PR base
 
       - id: scope
-        uses: ./.github/actions/docs-only
+        uses: ./.github/actions/fuzz-scope
       - name: Install dependencies
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm pkg-config \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
       - name: Per-function fuzz-coverage gate
-        if: steps.scope.outputs.result != 'true'
+        if: steps.scope.outputs.relevant == 'true'
         run: make fuzz-coverage-gate
