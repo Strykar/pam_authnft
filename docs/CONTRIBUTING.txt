@@ -321,8 +321,18 @@ Every push and pull request triggers:
   - musl build + unit suite on Alpine (.github/workflows/musl.yml)
   - cppcheck static analysis
   - CodeQL semantic analysis
-  - ASan / UBSan sanitizer builds
+  - ASan / UBSan sanitizer builds (sanitizer-link), plus sanitized-tests:
+    the unit suite run under ASan+UBSan+LSan (.github/workflows/sanitizers.yml)
   - libFuzzer harnesses (CIFuzz workflow, 60s budget per harness)
+  - Per-function fuzz-coverage gate, >=90% region on every fuzzed
+    function, replaying only the committed corpus
+    (.github/workflows/fuzz-coverage.yml)
+  - Integration suite + fault matrix in a booted-systemd container
+    (.github/workflows/integration.yml; also nightly)
+  - Reproducible-build check, sha256 of two clean builds
+    (.github/workflows/reproducibility.yml)
+  - THIRD_PARTY.md linked-library drift gate
+    (.github/workflows/third-party.yml)
   - Weekly Coverity Scan
   - Weekly mull mutation-testing run
     (.github/workflows/mutation.yml, Sunday 06:43 UTC) — surviving

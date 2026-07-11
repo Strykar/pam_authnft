@@ -46,11 +46,12 @@ The module exports only **pam_sm_open_session** and
     through *PAM_RHOST*. When the session process holds more than one
     ESTABLISHED TCP socket — for example an **nss_ldap** or krb5-over-TCP
     connection still open from the authentication phase — the module
-    prefers the inbound server socket, the one whose local port is a
-    TCP listener on the host, over an outbound socket. If that
-    disambiguation cannot be made (listen-port enumeration denied), the
-    first non-loopback match is used, so on such hosts verify the bound
-    address matches the client. The kernel-reported address is normalized
+    considers only the inbound server socket, the one whose local port is
+    a TCP listener on the host; an outbound socket the process holds is
+    excluded outright, not merely deprioritized. If that disambiguation
+    cannot be made (listen-port enumeration denied), the filter is
+    disabled and the first non-loopback match is used, so on such hosts
+    verify the bound address matches the client. The kernel-reported address is normalized
     (including v4-mapped v6 extraction). If the kernel lookup succeeds and
     the normalized value differs from a parseable *PAM_RHOST*, the module
     logs a **LOG_WARNING** of the form
