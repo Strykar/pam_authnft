@@ -289,6 +289,13 @@ audit-container:
 # pre-commit hook runs.
 audit: audit-container
 
+# Docs-drift gate: assert no doc points at a Makefile target, workflow, script
+# or file that has been deleted, and that security.txt has not expired. It does
+# not check whether prose is TRUE — only that it does not reference things that
+# no longer exist. Gated per-PR by .github/workflows/docs-drift.yml.
+docs-drift:
+	./ci/docs-drift-check.sh
+
 # Clang static analyzer (scan-build). Path-sensitive; --status-bugs makes
 # it exit non-zero on any analyzer bug. This is the checker that catches
 # the malloc-leak / use-after-free class — CID 1659576 (frag_buf) was found
@@ -649,5 +656,5 @@ distclean: clean
 
 .PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-container \
         test-integration-container test-musl trace trace-container trace-features \
-        audit audit-container \
+        audit audit-container docs-drift \
         distclean install install-tmpfiles uninstall man install-man

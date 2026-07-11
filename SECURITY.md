@@ -14,8 +14,14 @@ In scope:
   or syscalls outside the seccomp allowlist
 - Username, `PAM_RHOST`, or fragment-path handling that permits injection
   into nftables commands, D-Bus method calls, or filesystem operations
-- Leaks of per-session nftables state (chain, sets, jump rule) that
-  outlive the session beyond the safety-net timeout
+- Leaks of per-session nftables state that outlive the session. Note the
+  asymmetry: the set *element* carries a 24h timeout, so it stops matching
+  within a day even if `close_session` never runs, but the per-session chain,
+  sets, and jump rule have **no timeout of their own** — nothing reaps them on
+  a timer. They persist until a later login's PID recycles onto the leaked
+  names (which trips the self-heal) or an operator removes them. A leak of the
+  element beyond its timeout, or any leak reachable without a crash, is in
+  scope
 - Misuse of the `rhost_policy=kernel` sock_diag path: incorrect peer-address
   resolution that binds a session element to the wrong source IP
 - Misuse of the `claims_env` keyring-payload path: command injection via
