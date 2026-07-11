@@ -39,3 +39,5 @@ jobs:
         run: make CC=${{ matrix.compiler }}
       - name: Unit tests (no root)
         run: make CC=${{ matrix.compiler }} test
+
+# fuzz-skip control: workflow-only change; fuzz-scope should skip the fuzzers. throwaway.
