@@ -14,6 +14,23 @@ satisfied by the security-feed column.
 Updated whenever a dependency is added, removed, or has its version-floor
 shifted.
 
+**What "Min ver" means.** It is the lowest version the project is *tested*
+against — CI and the maintainer's host — not a proven hard minimum. An older
+version may well work; nobody has run it. Treat the column as "known good",
+not "anything below this is broken". Where the distinction matters, it is
+called out in the notes below.
+
+For **libnftables** specifically: every libnftables function the module calls
+(`nft_ctx_new`, `nft_run_cmd_from_buffer`, `nft_ctx_output_set_flags`,
+`nft_ctx_get_output_buffer`, `nft_ctx_get_error_buffer`,
+`nft_ctx_buffer_output`) and the `socket cgroupv2` parser support both exist as
+far back as nftables 1.0.0, so the true minimum is probably well below 1.1.0.
+It is listed at 1.1.0 because that is what CI and the dev host actually run
+(1.1.x). If you are packaging for a distro that ships 1.0.x — Debian 12 has
+1.0.6, RHEL 9 has 1.0.4, Ubuntu 22.04 has 1.0.2 — it very likely works, but
+confirm it rather than trusting this table: `sudo make test-packet-match`
+drives the real `socket cgroupv2` set, rule, and match end to end.
+
 ## Build- and run-time C libraries
 
 The shipped `pam_authnft.so` is dynamically linked against six system

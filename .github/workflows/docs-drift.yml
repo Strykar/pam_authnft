@@ -1,0 +1,24 @@
+name: docs-drift
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-drift:
+    # Docs rot in ways grep can see. This project shipped that rot twice: a
+    # README telling operators to uncomment systemd sandboxing a .slice
+    # silently ignores, and a whole CI tier deleted while docs still pointed
+    # at it. Both were greppable, so grep for them here. It does not check
+    # whether prose is true — only that it does not reference things that no
+    # longer exist. See ci/docs-drift-check.sh.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Docs reference nothing that has been deleted
+        run: ./ci/docs-drift-check.sh
