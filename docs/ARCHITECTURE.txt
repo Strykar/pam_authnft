@@ -84,35 +84,83 @@ when `UseDNS yes` hands PAM a hostname.
 Open-session sequence
 ---------------------
 
+Steps 1-7 run in the calling PAM process — the sshd privsep monitor —
+which is NEVER sandboxed. Only the forked child of step 8 carries the
+seccomp filter. See "Why the sandbox lives in a child" below.
+
     1. PAM_USER validated (util_is_valid_username)
     2. Root short-circuits to PAM_SUCCESS
     3. PAM_RHOST retrieved and normalized (util_normalize_ip): IPv4/IPv6
        literals accepted; IPv6 zone suffix "%zone" stripped; v4-mapped
        v6 addresses (::ffff:a.b.c.d) extracted to plain IPv4; hostnames
-       and unparseable values fall through (lax) or deny (strict)
-    4. sandbox_apply installs SCMP_ACT_KILL filter (PR_SET_NO_NEW_PRIVS
-       set first)
-    5. bus_handler_start invokes StartTransientUnit:
+       and unparseable values fall through (lax) or deny (strict).
+       Under rhost_policy=kernel the peer is instead read from the
+       session process's own INBOUND ESTABLISHED TCP socket via
+       NETLINK_SOCK_DIAG: only a socket whose local port is one of the
+       host's TCP listeners qualifies, so an outbound socket the process
+       also holds (nss_ldap, krb5-over-TCP) is excluded, not merely
+       deprioritized. No such socket => fall through to lax.
+    4. bus_handler_start invokes StartTransientUnit (unsandboxed: its
+       only non-deterministic input is systemd's reply on the system
+       bus, not user data):
          unit = "authnft-<user>-<pid>.scope"
          slice = "authnft.slice"
          job mode = "fail"
-    6. cg_path constructed deterministically from scope_unit
+    5. cg_path constructed deterministically from scope_unit
        ("authnft.slice/authnft-<user>-<pid>.scope")
-    7. cg_path + scope_unit + per-session chain/set names + remote_ip
+    6. cg_path + scope_unit + per-session chain/set names + remote_ip
        persisted via pam_set_data("authnft_cg_id", authnft_session_t)
        (the free callback is registered so PAM reclaims it)
-    8. nft_handler_setup:
-         - getgrnam("authnft") + getpwnam(user); non-members pass through
-         - stat(fragment): st_uid == 0 and !(mode & S_IWOTH)
-         - content validation: verb scan (reject flush/delete/reset/
-           list/rename), include-path check (absolute, under
-           /etc/authnft/, no globs)
-         - call 1: add table + shared filter chain + ct state rule +
-                   per-session chain + 3 per-session sets + element
-         - call 2 (ECHO|HANDLE): add jump rule in shared filter chain;
-                   parse kernel-assigned handle from output buffer
-         - call 3: read fragment, substitute four placeholders
-                   (@session_v4/v6/cg/chain → live names), execute
+    7. pipe() + fork() -> the setup child. The parent blocks on the pipe
+       for the child's {rc, jump_handle, reject_reason} and never
+       installs a filter on itself.
+    8. IN THE CHILD, in this order:
+         a. nft_user_in_authnft_group: getgrnam("authnft") +
+            getpwnam(user) + getgrouplist. This runs BEFORE the filter,
+            deliberately. NSS backends dlopen modules (sss, ldap,
+            systemd) that issue syscalls the allowlist does not cover;
+            under the filter they would SIGSYS-kill the child and lock
+            out every directory user. Running them in this short-lived
+            child (rather than in the parent) also means any NSS
+            connection state dies with it, instead of lingering in the
+            sshd monitor, where it raced the transient-scope teardown on
+            a failed session. A non-member returns PAM_SUCCESS and no
+            nftables state is created.
+         b. sandbox_apply installs SCMP_ACT_KILL filter
+            (PR_SET_NO_NEW_PRIVS set first). From here on the child is
+            the only process in the system carrying the filter.
+         c. nft_handler_setup:
+              - stat(fragment): st_uid == 0 and !(mode & S_IWOTH)
+              - content validation: statement-aware scan. The buffer is
+                split into statements on ';' and newline at brace-depth
+                0, tracking "..." quotes and '#' comments so a separator
+                inside either is not a split point; each statement's
+                leading verb is then matched by token (reject flush/
+                delete/destroy/reset/list/rename/insert/replace/monitor),
+                along with an include-path check (absolute, under
+                /etc/authnft/, no '..', no globs) and a guard against
+                targeting the shared 'filter' chain. A first-token scan
+                of each newline-delimited line missed a verb hidden
+                after a ';'.
+                A missing / insecure / rejected fragment fails HERE, so
+                no nftables object is created at all.
+              - call 1: add table + shared filter chain + ct state rule
+                        (probed: added only if not already present) +
+                        per-session chain + 3 per-session sets + element.
+                        On "already exists"/"busy" (a PID recycled onto a
+                        leaked session's names) the stale (user, pid)
+                        state is reaped and call 1 is retried once, so
+                        the user is not fail-closed out of their own
+                        session.
+              - call 2 (ECHO|HANDLE): add jump rule in shared filter
+                        chain; parse kernel-assigned handle from output
+              - call 3: read fragment, substitute four placeholders
+                        (@session_v4/v6/cg/chain -> live names), execute
+         d. write {rc, jump_handle, reason} to the pipe and _exit().
+            The child dies; the nftables state it created is kernel-side
+            and outlives it.
+    9. Parent: session_file_write (0640 root:root, root-only) and
+       event_open_emit (AUTHNFT_EVENT=open + correlation token).
 
 Placeholder substitution is token-aware (skips #comments and "..."
 strings) and covers the top-level fragment only. Files pulled in
