@@ -73,8 +73,13 @@ jobs:
 
       - name: Resolve fuzz duration
         id: duration
+        env:
+          # Via env, not inline ${{ }}: the dispatch input is caller-supplied,
+          # and interpolating it straight into the script would let a dispatcher
+          # inject shell. As a variable it is data, never code.
+          DURATION_INPUT: ${{ github.event.inputs.duration_seconds }}
         run: |
-          dur="${{ github.event.inputs.duration_seconds }}"
+          dur="$DURATION_INPUT"
           if [ -z "$dur" ]; then dur="${FUZZ_SECONDS}"; fi
           echo "seconds=$dur" >> "$GITHUB_OUTPUT"
           echo "Fuzzing ${{ matrix.harness }} for $dur seconds"
