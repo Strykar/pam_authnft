@@ -36,7 +36,7 @@ column lists the bug class or signal each tool produces.
 | **Kernel packet-match check** | `make test-packet-match` → `tests/packet_match_headless.sh` | manual, on the target host | drives the real `socket cgroupv2` match on INPUT (allowed/disallowed match, alloc-time invariant, per-session isolation). The module needs commit 05ae2fba821c, which is a patch, not a version: a kernel in [5.13, 5.18) without it accepts the rule and never matches, so the session's rules silently never apply. No version check detects that; this does |
 | **valgrind on unit suite** | `make test-integration` | manual | leaks, use-after-free, double-free |
 | **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps (github-actions ecosystem only; the C-library inventory is manual, see below) |
-| **Third-party drift gate** | `.github/workflows/third-party.yml` → `ci/thirdparty-check.sh` | every PR | asserts every `DT_NEEDED` library the .so links is inventoried in `docs/THIRD_PARTY.md`, so a new dependency cannot land without an entry (versions/CVE feeds stay manual) |
+| **Third-party drift gate** | `.github/workflows/third-party.yml` → `tests/ci/thirdparty-check.sh` | every PR | asserts every `DT_NEEDED` library the .so links is inventoried in `docs/THIRD_PARTY.md`, so a new dependency cannot land without an entry (versions/CVE feeds stay manual) |
 | **SBOM** | `.github/workflows/sbom.yml` → `make sbom` (syft) | every release + dispatch | generates a CycloneDX SBOM of the shipped .so and attaches it to the release |
 | **fuzz-coverage measurement** | `make fuzz-coverage` → `docs/fuzz-coverage/` | manual / per-PR | per-function fuzz region/line/branch coverage; gates the ≥90% bar in `docs/FUZZ_SURFACE.md` |
 | **Reproducibility check** | `.github/workflows/reproducibility.yml` → `make reproducibility-check` | every PR | builds pam_authnft.so twice from a clean tree and fails on a sha256 mismatch (bit-identical same-machine builds) |
@@ -52,7 +52,6 @@ Each artefact below has a single owner-doc. Don't duplicate; cross-link.
 | Public vulnerability reporting policy | [`SECURITY.md`](../SECURITY.md) |
 | Internal incident-response runbook | [`docs/INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md) |
 | Third-party dependency inventory | [`docs/THIRD_PARTY.md`](THIRD_PARTY.md) |
-| RFC 9116 reporting metadata | [`.well-known/security.txt`](../.well-known/security.txt) |
 | Build reproducibility expectations | [`docs/REPRODUCIBLE_BUILDS.md`](REPRODUCIBLE_BUILDS.md) |
 | Architecture / lifecycle / trust model | [`docs/ARCHITECTURE.txt`](ARCHITECTURE.txt) |
 | Stable producer/consumer contracts | [`docs/INTEGRATIONS.txt`](INTEGRATIONS.txt) |

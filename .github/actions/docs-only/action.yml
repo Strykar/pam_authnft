@@ -34,7 +34,7 @@ runs:
         # Note docs/THIRD_PARTY.md is documentation here, which is why
         # third-party.yml does not use this action: its gate reads that file,
         # so a doc edit really can flip it.
-        DOCS='^(docs/|[^/]+\.md$|\.well-known/|LICENSE$)'
+        DOCS='^(docs/|[^/]+\.md$|LICENSE$)'
 
         # Pushes to main, dispatches and crons have no PR to diff against.
         if [ "$EVENT_NAME" != "pull_request" ]; then

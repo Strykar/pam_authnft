@@ -20,15 +20,18 @@ docs/DOC_CHECKLIST.txt
 docs/audit_scope.txt
 
 # Local audit harness build artifacts
-audit/nft_fault_driver
-audit/malloc_fail.so
-audit/nft_fail.so
+tests/audit/nft_fault_driver
+tests/audit/malloc_fail.so
+tests/audit/nft_fail.so
 
 # Fuzz coverage build outputs (make fuzz-coverage / fuzz-coverage-gate).
-# The committed corpus lives in fuzz/corpus/; everything below is generated.
-fuzz/coverage/
-fuzz/out/
+# The committed corpus lives in tests/fuzz/corpus/; everything below is generated.
+tests/fuzz/coverage/
+tests/fuzz/out/
 # Persisted libFuzzer corpus restored by the nightly cache (fuzz-nightly.yml).
-fuzz/corpus-cache/
+tests/fuzz/corpus-cache/
 *.profraw
 *.profdata
+
+# CI stages a working copy of tests/ci/mull.yml here for mull discovery.
+/mull.yml

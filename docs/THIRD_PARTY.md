@@ -96,7 +96,7 @@ These are referenced by the project but not currently active:
 
 | Service | Status | Where mentioned |
 |---|---|---|
-| OSS-Fuzz | submission staged at `infra/oss-fuzz/`; gated on project age | `docs/TODO.txt` near-term |
+| OSS-Fuzz | submission staged at `tests/fuzz/oss-fuzz/`; gated on project age | `docs/TODO.txt` near-term |
 | Coverity Scan | weekly cron present | `.github/workflows/coverity.yml` |
 | OpenSSF Best Practices badge | active, project 12496 | README badge row |
 
@@ -106,9 +106,9 @@ After adding or removing a dependency:
 
 1. Update the relevant table here.
 2. Update `Makefile` `LIBS` if it's a build-time C library.
-3. Update `Containerfile` (`dnf install` line) for Fedora-specific names.
+3. Update `tests/container/Containerfile` (`dnf install` line) for Fedora-specific names.
 4. Update every `.github/workflows/*.yml` `apt install` line.
-5. Update `infra/oss-fuzz/{Dockerfile,build.sh}`.
+5. Update `tests/fuzz/oss-fuzz/{Dockerfile,build.sh}`.
 6. Update `docs/CONTRIBUTING.txt` "Build" section count.
 
 A merge that touches `Makefile` `LIBS` without updating this doc is a

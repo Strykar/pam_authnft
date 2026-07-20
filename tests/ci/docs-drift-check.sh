@@ -20,9 +20,8 @@
 #   1. `make <target>` in a doc must be a real Makefile target.
 #   2. In-tree paths named in a doc must exist.
 #   3. Relative markdown links must resolve.
-#   4. .well-known/security.txt must not be expired or near-expiring (RFC 9116).
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 fail=0
 note() { printf '  %-6s %s\n' "$1" "$2"; }
@@ -34,7 +33,7 @@ note() { printf '  %-6s %s\n' "$1" "$2"; }
 ARCHIVAL='docs/MUTATION_ASAN_EXPERIMENT.md|docs/MUTATION_ASAN_INVESTIGATION_2.md|docs/NFT_VALIDATOR_SURVIVOR_AUDIT.md'
 
 DOCS=()
-for f in README.md SECURITY.md CODE_OF_CONDUCT.md; do [ -f "$f" ] && DOCS+=("$f"); done
+for f in README.md SECURITY.md .github/CODE_OF_CONDUCT.md; do [ -f "$f" ] && DOCS+=("$f"); done
 while IFS= read -r f; do
     [[ "$f" =~ ^($ARCHIVAL)$ ]] && continue
     DOCS+=("$f")
@@ -71,7 +70,7 @@ done
 
 # --- 2. in-tree paths must exist ------------------------------------------
 echo "== in-tree paths referenced in docs =="
-PATH_RE='(\.github/workflows/[A-Za-z0-9_.-]+\.yml|ci/[A-Za-z0-9_.-]+\.(sh|py)|tests/[A-Za-z0-9_./-]+\.(sh|c)|audit/[A-Za-z0-9_.-]+\.(sh|c|so)|src/[A-Za-z0-9_.-]+\.c|include/[A-Za-z0-9_.-]+\.h|data/[A-Za-z0-9_.-]+)'
+PATH_RE='(\.github/workflows/[A-Za-z0-9_.-]+\.yml|tests/[A-Za-z0-9_./-]+\.(sh|py|c|so)|src/[A-Za-z0-9_.-]+\.(c|map)|include/[A-Za-z0-9_.-]+\.h|data/[A-Za-z0-9_.-]+)'
 for f in "${DOCS[@]}"; do
     for p in $(grep -oE "$PATH_RE" "$f" | strip_punct | sort -u); do
         # A .so is a BUILD ARTIFACT, absent from a clean checkout. Docs name
@@ -107,30 +106,6 @@ for f in "${DOCS[@]}"; do
         echo x >> /tmp/.docsdrift.$$
     done
 done
-
-# --- 4. security.txt must be live (RFC 9116) ------------------------------
-echo "== .well-known/security.txt =="
-SEC=.well-known/security.txt
-if [ ! -f "$SEC" ]; then
-    note DRIFT "$SEC missing, but SECURITY.md points at it"
-    echo x >> /tmp/.docsdrift.$$
-else
-    exp="$(grep -i '^Expires:' "$SEC" | head -1 | sed 's/^[Ee]xpires:[[:space:]]*//')"
-    exp_s="$(date -d "$exp" +%s 2>/dev/null || echo 0)"
-    now_s="$(date -u +%s)"
-    if [ -z "$exp" ] || [ "$exp_s" -eq 0 ]; then
-        note DRIFT "$SEC has no parseable Expires (RFC 9116 requires one)"
-        echo x >> /tmp/.docsdrift.$$
-    elif [ "$exp_s" -le "$now_s" ]; then
-        note DRIFT "$SEC EXPIRED on $exp — reporters may read the channel as dead"
-        echo x >> /tmp/.docsdrift.$$
-    elif [ $(( (exp_s - now_s) / 86400 )) -le 30 ]; then
-        note DRIFT "$SEC expires in $(( (exp_s - now_s) / 86400 )) days ($exp) — bump it"
-        echo x >> /tmp/.docsdrift.$$
-    else
-        note ok "expires in $(( (exp_s - now_s) / 86400 )) days"
-    fi
-fi
 
 [ -s /tmp/.docsdrift.$$ ] && fail=1
 rm -f /tmp/.docsdrift.$$

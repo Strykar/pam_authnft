@@ -35,7 +35,7 @@ working on it. Nothing is publicly visible yet.
 ## Phase 2 — Confirm and analyze (target: by day 10)
 
 1. **Reproduce the report locally.** If the PoC is a fuzz crash, save it
-   to `fuzz/corpus/<harness>/regression_<short-id>` and re-run the
+   to `tests/fuzz/corpus/<harness>/regression_<short-id>` and re-run the
    harness against it; this is the regression artefact for later.
 2. **Reduce to a minimal reproducer.** A 10-byte input is easier to
    reason about than a 10-KB one.
@@ -127,10 +127,10 @@ Use the scoring as a guide; if in doubt round up.
 
 ## Common artefacts and where to find them
 
-- **Crash inputs** → `fuzz/corpus/<harness>/regression_*`
+- **Crash inputs** → `tests/fuzz/corpus/<harness>/regression_*`
 - **Coverage report** → `docs/fuzz-coverage/index.html`
 - **Fuzz inventory** → `docs/FUZZ_SURFACE.md` (also tracks bugs found)
 - **Trust model** → `docs/ARCHITECTURE.txt` "Trust model"
 - **Seccomp allowlist** → `src/sandbox.c`
 - **Test surface** → `tests/test_suite.c`, `tests/integration_test.sh`,
-  `tests/oracle/`, `fuzz/`
+  `tests/oracle/`, `tests/fuzz/`

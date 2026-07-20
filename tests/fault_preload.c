@@ -3,7 +3,7 @@
 //
 // LD_PRELOAD fault injector for the run_sandboxed_nft_setup error paths that
 // real triggers (an allowlist gap, fd or process exhaustion) cannot reach
-// deterministically. Same mechanism as audit/nft_fail.c. Inert unless one of
+// deterministically. Same mechanism as tests/audit/nft_fail.c. Inert unless one of
 // its env vars is set. Driven by tests/integration_test.sh stages 10.22-10.24.
 //
 //   AUTHNFT_FAULT_PIPE=1            pipe(2) returns EMFILE

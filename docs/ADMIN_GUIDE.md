@@ -206,7 +206,8 @@ table inet authnft {
     set session_alice_1127936_v4 {
         typeof socket cgroupv2 level 0 . ip saddr
         flags timeout
-        elements = { "authnft.slice/authnft-alice-1127936.scope" . 192.0.2.1 timeout 1d expires 23h55m56s comment "alice (PID:1127936)" }
+        elements = { "authnft.slice/authnft-alice-1127936.scope" . 192.0.2.1
+                     timeout 1d expires 23h55m56s comment "alice (PID:1127936)" }
     }
 
     set session_alice_1127936_v6 {
@@ -240,7 +241,8 @@ module in the stack, the element comment is extended with the sanitized
 payload:
 
 ```
-elements = { "authnft.slice/authnft-alice-1127936.scope" . 192.0.2.1 timeout 1d comment "alice (PID:1127936) [audit-session:7f3e9a]" }
+elements = { "authnft.slice/authnft-alice-1127936.scope" . 192.0.2.1
+             timeout 1d comment "alice (PID:1127936) [audit-session:7f3e9a]" }
 ```
 
 The quoted path is the session's cgroupv2 scope under `authnft.slice`. The

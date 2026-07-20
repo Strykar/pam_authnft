@@ -10,7 +10,7 @@
 If your change affects any of the following, describe how and why it's safe.
 Otherwise, write "none".
 
-- Exported symbol set (pam_authnft.map)
+- Exported symbol set (src/pam_authnft.map)
 - Lifecycle ordering in pam_sm_open_session / pam_sm_close_session
 - Session-data persistence via pam_set_data
 - Seccomp allowlist (src/sandbox.c)

@@ -10,7 +10,7 @@
 # so a new dependency cannot be added without updating the inventory. It does
 # NOT check versions or feeds — those stay a manual review.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 SO=pam_authnft.so
 DOC=docs/THIRD_PARTY.md

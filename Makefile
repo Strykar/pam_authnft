@@ -25,7 +25,7 @@ HARDENING = -fstack-clash-protection \
 
 CFLAGS_BASE  = -fPIC -Wall -Wextra -O2 -Iinclude -D_GNU_SOURCE $(HARDENING)
 LDFLAGS_BASE = -Wl,-z,relro,-z,now
-SO_LDFLAGS   = $(LDFLAGS_BASE) -shared -Wl,--version-script=pam_authnft.map
+SO_LDFLAGS   = $(LDFLAGS_BASE) -shared -Wl,--version-script=src/pam_authnft.map
 
 TARGET              = pam_authnft.so
 TEST_BIN            = authnft_test
@@ -193,7 +193,7 @@ test-packet-match:
 
 CONTAINER_IMG = pam_authnft-test
 CONTAINER_BUILD = @command -v podman >/dev/null || { echo "podman not installed"; exit 1; } \
-                  ; podman build -t $(CONTAINER_IMG) -f Containerfile . >/dev/null
+                  ; podman build -t $(CONTAINER_IMG) -f tests/container/Containerfile . >/dev/null
 
 # Common podman invocation. Callers set RESULT_DIR to a host path
 # that will be bind-mounted to /shared, and populate
@@ -226,9 +226,9 @@ test-container:
 # musl (Alpine) build + unit suite — catches libc-specific seccomp allowlist
 # gaps (the open/readv/writev class) that a glibc-only CI misses. The unit
 # suite's Stage 13 exercises the setup-path syscalls under the sandbox. See
-# ci/musl-test.sh.
+# tests/ci/musl-test.sh.
 test-musl:
-	ci/musl-test.sh $(CURDIR)
+	tests/ci/musl-test.sh $(CURDIR)
 
 # Full pamtester integration flow inside the container. systemd
 # is running as PID 1, so StartTransientUnit over sd-bus works.
@@ -257,23 +257,23 @@ trace-container:
 # the production objects under -fsanitize=address,undefined; the nft_fail
 # preload drives the call-2 and handle-parse returns, and the malloc-fail
 # preload is a manual allocation-failure tool. All are built and run
-# inside the rootful audit container by audit/run-audit.sh. This is the
+# inside the rootful audit container by tests/audit/run-audit.sh. This is the
 # harness that would have caught CID 1659576.
 # ---------------------------------------------------------------------
-AUDIT_DRIVER  = audit/nft_fault_driver
-AUDIT_PRELOAD = audit/malloc_fail.so
+AUDIT_DRIVER  = tests/audit/nft_fault_driver
+AUDIT_PRELOAD = tests/audit/malloc_fail.so
 AUDIT_CFLAGS  = -fPIC -Wall -Wextra -g -O1 -Iinclude -D_GNU_SOURCE \
                 -fsanitize=address,undefined -fno-omit-frame-pointer
 
-$(AUDIT_DRIVER): audit/nft_fault_driver.c $(wildcard src/*.c) include/authnft.h
-	$(CC) $(AUDIT_CFLAGS) audit/nft_fault_driver.c $(wildcard src/*.c) \
+$(AUDIT_DRIVER): tests/audit/nft_fault_driver.c $(wildcard src/*.c) include/authnft.h
+	$(CC) $(AUDIT_CFLAGS) tests/audit/nft_fault_driver.c $(wildcard src/*.c) \
 	    -o $@ `$(PKG_CONFIG) --libs $(LIBS)`
 
-$(AUDIT_PRELOAD): audit/malloc_fail.c
+$(AUDIT_PRELOAD): tests/audit/malloc_fail.c
 	$(CC) -fPIC -shared -O1 -o $@ $< -ldl
 
-AUDIT_NFTFAIL = audit/nft_fail.so
-$(AUDIT_NFTFAIL): audit/nft_fail.c
+AUDIT_NFTFAIL = tests/audit/nft_fail.so
+$(AUDIT_NFTFAIL): tests/audit/nft_fail.c
 	$(CC) -fPIC -shared -O1 -o $@ $< -ldl
 
 audit-build: $(AUDIT_DRIVER) $(AUDIT_PRELOAD) $(AUDIT_NFTFAIL)
@@ -290,11 +290,11 @@ audit-container:
 audit: audit-container
 
 # Docs-drift gate: assert no doc points at a Makefile target, workflow, script
-# or file that has been deleted, and that security.txt has not expired. It does
+# or file that has been deleted. It does
 # not check whether prose is TRUE — only that it does not reference things that
 # no longer exist. Gated per-PR by .github/workflows/docs-drift.yml.
 docs-drift:
-	./ci/docs-drift-check.sh
+	./tests/ci/docs-drift-check.sh
 
 # Clang static analyzer (scan-build). Path-sensitive; --status-bugs makes
 # it exit non-zero on any analyzer bug. This is the checker that catches
@@ -491,16 +491,16 @@ install-man: man/pam_authnft.8
 	sudo gzip -f $(MAN_DIR)/pam_authnft.8
 
 # Fuzz targets — requires clang + compiler-rt (libFuzzer).
-# Builds harnesses with ASan + libFuzzer into fuzz/out/. Run a target
+# Builds harnesses with ASan + libFuzzer into tests/fuzz/out/. Run a target
 # directly to start fuzzing, optionally with a corpus directory.
 # Surface and status: docs/FUZZ_SURFACE.md.
 FUZZ_CC  = clang
-FUZZ_OUT = fuzz/out
+FUZZ_OUT = tests/fuzz/out
 FUZZ_COMMON = -g -O1 -Iinclude -D_GNU_SOURCE -DFUZZ_BUILD \
               -fsanitize=address -fno-omit-frame-pointer
 
-# Harness source files live at fuzz/fuzz_<name>.c. To add a new harness,
-# drop the source in fuzz/ and append the binary path here.
+# Harness source files live at tests/fuzz/fuzz_<name>.c. To add a new harness,
+# drop the source in tests/fuzz/ and append the binary path here.
 FUZZ_TARGETS = $(FUZZ_OUT)/fuzz_username \
                $(FUZZ_OUT)/fuzz_fragment \
                $(FUZZ_OUT)/fuzz_substitute_placeholders \
@@ -517,7 +517,7 @@ $(FUZZ_OUT)/obj/%.o: src/%.c
 	$(FUZZ_CC) $(FUZZ_COMMON) -fsanitize=fuzzer-no-link \
 	    `$(PKG_CONFIG) --cflags $(LIBS)` -c $< -o $@
 
-$(FUZZ_OUT)/fuzz_%: fuzz/fuzz_%.c $(FUZZ_SRC_OBJS)
+$(FUZZ_OUT)/fuzz_%: tests/fuzz/fuzz_%.c $(FUZZ_SRC_OBJS)
 	@mkdir -p $(FUZZ_OUT)
 	$(FUZZ_CC) $(FUZZ_COMMON) -fsanitize=fuzzer \
 	    `$(PKG_CONFIG) --cflags $(LIBS)` \
@@ -540,7 +540,7 @@ fuzz: $(FUZZ_TARGETS)
 # under FUZZ_COV_OUT and ARE wiped by `make clean`. The HTML report under
 # FUZZ_COV_HTML is preserved across `make clean` so it can be browsed
 # without rebuilding.
-FUZZ_COV_OUT  = fuzz/coverage
+FUZZ_COV_OUT  = tests/fuzz/coverage
 FUZZ_COV_HTML = docs/fuzz-coverage
 # -ffile-prefix-map keeps absolute paths to the source tree out of the
 # debug info / coverage mapping, so the generated HTML filenames are
@@ -562,17 +562,17 @@ fuzz-coverage:
 	@for h in $(notdir $(FUZZ_TARGETS)); do \
 	    $(FUZZ_CC) $(FUZZ_COV_CFLAGS) -fsanitize=fuzzer \
 	        `$(PKG_CONFIG) --cflags $(LIBS)` \
-	        fuzz/$$h.c $(FUZZ_COV_OUT)/obj/*.o \
+	        tests/fuzz/$$h.c $(FUZZ_COV_OUT)/obj/*.o \
 	        `$(PKG_CONFIG) --libs $(LIBS)` \
 	        -o $(FUZZ_COV_OUT)/$$h || exit 1; \
 	done
 	@# Each harness reads its seed/regression corpus from
-	@# fuzz/corpus/<harness-stem>/ (e.g., fuzz_fragment uses
-	@# fuzz/corpus/fragment/). Seeds materially improve coverage in the
+	@# tests/fuzz/corpus/<harness-stem>/ (e.g., fuzz_fragment uses
+	@# tests/fuzz/corpus/fragment/). Seeds materially improve coverage in the
 	@# 10s window — without them the IPv6 v4-mapped path, glob-in-include
 	@# path, and similar narrow branches stay unhit.
 	@for h in $(notdir $(FUZZ_TARGETS)); do \
-	    corpus="fuzz/corpus/$${h#fuzz_}"; \
+	    corpus="tests/fuzz/corpus/$${h#fuzz_}"; \
 	    [ -d "$$corpus" ] || corpus=""; \
 	    echo ">>> running $$h for 10s (corpus: $${corpus:-none})"; \
 	    LLVM_PROFILE_FILE=$(FUZZ_COV_OUT)/$$h.profraw \
@@ -593,7 +593,7 @@ fuzz-coverage:
 	    llvm-cov show $(FUZZ_COV_OUT)/$$(basename $$first) \
 	        -instr-profile=$(FUZZ_COV_OUT)/merged.profdata \
 	        -format=html -output-dir=$(FUZZ_COV_HTML).new \
-	        --ignore-filename-regex='/usr/.*|fuzz/.*' \
+	        --ignore-filename-regex='/usr/.*|tests/fuzz/.*' \
 	        src/
 	@# llvm-cov bakes the absolute build path into the output filename
 	@# tree and into HTML hrefs. Flatten the per-source tree to
@@ -630,7 +630,7 @@ fuzz-coverage:
 	@first=$$(echo $(FUZZ_TARGETS) | awk '{print $$1}'); \
 	    llvm-cov report $(FUZZ_COV_OUT)/$$(basename $$first) \
 	        -instr-profile=$(FUZZ_COV_OUT)/merged.profdata \
-	        --ignore-filename-regex='/usr/.*|fuzz/.*' \
+	        --ignore-filename-regex='/usr/.*|tests/fuzz/.*' \
 	        src/
 	@echo
 	@echo "HTML report: $(FUZZ_COV_HTML)/index.html"
@@ -640,7 +640,7 @@ fuzz-coverage:
 # the number is reproducible; fails if any fuzzed function drops below the bar.
 # Honors LLVM_COV_EXCL_* markers for provably-unreachable defensive branches.
 fuzz-coverage-gate:
-	python3 ci/fuzz-coverage-gate.py
+	python3 tests/ci/fuzz-coverage-gate.py
 
 # clean intentionally does NOT wipe $(FUZZ_COV_HTML) — the report is the
 # committed artefact, browsable without rebuilding. Re-run

@@ -14,7 +14,7 @@
 # Valid workflows: unit, integration, trace.
 #
 # Build:
-#   podman build -t pam_authnft-test -f Containerfile .
+#   podman build -t pam_authnft-test -f tests/container/Containerfile .
 #
 # Run (see `make test-*-container` targets for canonical invocations):
 #   mkdir -p ./result
@@ -63,10 +63,10 @@ RUN dnf -y install \
 # executes the target make goals, writes the exit code to
 # /shared/exit. Halts systemd at the end so the container exits
 # cleanly on `podman run --rm`.
-COPY container/run-workflow /usr/local/bin/run-workflow
+COPY tests/container/run-workflow /usr/local/bin/run-workflow
 RUN chmod +x /usr/local/bin/run-workflow
 
-COPY container/authnft-workflow.service /etc/systemd/system/authnft-workflow.service
+COPY tests/container/authnft-workflow.service /etc/systemd/system/authnft-workflow.service
 
 RUN systemctl enable authnft-workflow.service \
  && mkdir -p /build /shared

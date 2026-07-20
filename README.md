@@ -50,7 +50,8 @@ table inet authnft {
     set session_alice_1127936_v4 {
         typeof socket cgroupv2 level 0 . ip saddr
         flags timeout
-        elements = { "authnft.slice/authnft-alice-1127936.scope" . 192.0.2.1 timeout 1d expires 23h55m56s comment "alice (PID:1127936)" }
+        elements = { "authnft.slice/authnft-alice-1127936.scope" . 192.0.2.1
+                     timeout 1d expires 23h55m56s comment "alice (PID:1127936)" }
     }
 
     set session_alice_1127936_v6 {
@@ -121,7 +122,7 @@ and the Linux audit-syscall channel
 `rhost_policy=kernel` NETLINK internals, `authnft.slice` shipped defaults.
 
 **Planned** — OSS-Fuzz registration (project files staged at
-[infra/oss-fuzz/](infra/oss-fuzz/), submission gated on project age),
+[tests/fuzz/oss-fuzz/](tests/fuzz/oss-fuzz/), submission gated on project age),
 fragment linter (wraps libnftables dry-run), pluggable fragment
 sources, packaging for Arch (AUR) and Debian. See
 [docs/TODO.txt](docs/TODO.txt) for the full list.
@@ -138,7 +139,7 @@ welcome. The areas where help is most wanted:
   or AAA stack and want to try the `claims_env` path, seed
   `AUTHNFT_CORRELATION` for audit joining, or drive fragment generation,
   open an issue describing the use case
-- **Fuzzing** — the eight harnesses in `fuzz/` all clear the 90% region-coverage
+- **Fuzzing** — the eight harnesses in `tests/fuzz/` all clear the 90% region-coverage
   gate (see [docs/FUZZ_SURFACE.md](docs/FUZZ_SURFACE.md)). Wanted: harnesses for
   functions not yet on that surface map, and property assertions for the
   crash-only harnesses

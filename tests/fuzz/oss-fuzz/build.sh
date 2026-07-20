@@ -31,23 +31,23 @@ done
 # fuzz_username: exercises util_is_valid_username and util_normalize_ip.
 # Both functions accept arbitrary strings with no I/O or PAM context.
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_username.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_username.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_username"
 
 # fuzz_fragment: exercises validate_fragment_content (verb/include scanner).
 # Uses memfd_create to present fuzz bytes as a file path without disk writes.
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_fragment.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_fragment.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_fragment"
 
 # fuzz_substitute_placeholders: exercises substitute_placeholders, the
 # token-aware @session_* expander with comment/quote state machine and
 # malloc(src_len*2+1) sizing budget. Carries a property assertion on
-# the output-length invariant (see fuzz/fuzz_substitute_placeholders.c).
+# the output-length invariant (see tests/fuzz/fuzz_substitute_placeholders.c).
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_substitute_placeholders.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_substitute_placeholders.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_substitute_placeholders"
 
@@ -56,20 +56,20 @@ $CC $CFLAGS $COMMON $PKGCF \
 # Highest attacker-reachable parser in the module — kernel-supplied
 # bytes flow into hand-rolled length arithmetic.
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_netlink_diag.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_netlink_diag.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_netlink_diag"
 
 # fuzz_keyring_sanitize: printable-ASCII filter that scrubs a
 # kernel-keyring payload before it lands in an nftables comment field.
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_keyring_sanitize.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_keyring_sanitize.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_keyring_sanitize"
 
 # fuzz_correlation_capture: AUTHNFT_CORRELATION PAM env sanitizer.
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_correlation_capture.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_correlation_capture.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_correlation_capture"
 
@@ -77,13 +77,13 @@ $CC $CFLAGS $COMMON $PKGCF \
 # by sd_pid_get_cgroup. Pure string parser; off-by-one bugs here either
 # silently deny every authnft session or accept malformed paths.
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_cgroup_path.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_cgroup_path.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_cgroup_path"
 
 # fuzz_socket_inode: parse_socket_inode (regression guard for a thin
 # sscanf wrapper used during /proc/<pid>/fd traversal).
 $CC $CFLAGS $COMMON $PKGCF \
-    fuzz/fuzz_socket_inode.c "$WORK"/obj/*.o \
+    tests/fuzz/fuzz_socket_inode.c "$WORK"/obj/*.o \
     $LIB_FUZZING_ENGINE $PKGLD \
     -o "$OUT/fuzz_socket_inode"

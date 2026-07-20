@@ -16,7 +16,7 @@ on:
       - 'include/util_validators.h'
       - 'tests/test_util_validators.c'
       - 'Makefile'
-      - 'mull.yml'
+      - 'tests/ci/mull.yml'
       - '.github/workflows/util-validator-mutation.yml'
   workflow_dispatch:
 
@@ -71,7 +71,9 @@ jobs:
       - name: Build mull + ASan util-validator test binary
         env:
           MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
-        run: make test_util_validators.mull
+        run: |
+          cp tests/ci/mull.yml mull.yml
+          make test_util_validators.mull
 
       - name: Run mull-runner
         id: mull
