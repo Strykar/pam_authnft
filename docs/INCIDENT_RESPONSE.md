@@ -65,7 +65,7 @@ working on it. Nothing is publicly visible yet.
    - integration-test stage (lifecycle / state-leak bugs)
 3. **Self-review**, then if a second reviewer is available, brief them
    under the same advisory.
-4. **Decide on backports.** Currently alpha-only, so this means: latest
+4. **Decide on backports.** Currently pre-1.0 only, so this means: latest
    released minor only. Note the decision in the advisory.
 
 ## Phase 4 — Disclosure planning
