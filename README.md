@@ -31,12 +31,6 @@ setuid binary, no kernel patches.
   <img src="docs/mascot.svg" alt="pam_authnft mascot" width="200">
 </p>
 
-> **Status: alpha (0.x.x).** The PAM interface (two exported symbols),
-> nftables set schema and fragment format are intended to be stable. The
-> `claims_env` wire format, `rhost_policy=kernel` NETLINK details and
-> slice defaults may change before 1.0. See the
-> [roadmap](docs/ROADMAP.md).
-
 ## What a session looks like
 
 A session's entire runtime footprint is ordinary nftables state,

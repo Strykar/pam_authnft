@@ -1,6 +1,6 @@
 # Security Policy
 
-pam_authnft is alpha software. It runs inside the PAM process of services
+pam_authnft is pre-1.0 software. It runs inside the PAM process of services
 like `sshd`, `login`, and `su` with whatever privilege that service holds —
 typically root. Security reports are taken seriously.
 
@@ -49,7 +49,7 @@ reports; use the advisory form above.
 
 ## Response timeline
 
-Given the alpha status and single-maintainer cadence, the targets below
+Given the pre-release status and single-maintainer cadence, the targets below
 are best-effort and will firm up as the project matures. They are stated
 explicitly so reporters know what to expect and when to escalate.
 
@@ -59,7 +59,7 @@ explicitly so reporters know what to expect and when to escalate.
 | Initial triage (in-scope, reproducible, severity-rated) | within **10 business days** | a report flagged out-of-scope is closed at this step with reasoning |
 | Coordinated disclosure window | **90 days** from acknowledgment unless mutually negotiated | shorter if a fix ships sooner, longer if the reporter and maintainer agree (e.g., for downstream packagers) |
 | Public advisory | simultaneous with the fix release | published as a GitHub Security Advisory + CVE if assigned, with credit to the reporter unless they request otherwise |
-| Fix backports | as feasible to released versions | alpha series; long-term support branches do not exist yet |
+| Fix backports | as feasible to released versions | pre-1.0 series; long-term support branches do not exist yet |
 
 Reporters who escalate during the window (e.g., observe an in-the-wild
 exploit, or believe the issue is being exploited against them) MAY shorten
