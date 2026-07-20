@@ -379,6 +379,12 @@ MULL_LLVM_MAJOR  ?= 19
 MULL_RUNNER      ?= mull-runner-$(MULL_LLVM_MAJOR)
 MULL_CLANG       ?= clang-$(MULL_LLVM_MAJOR)
 MULL_IR_FRONTEND ?= /usr/lib/mull-ir-frontend-$(MULL_LLVM_MAJOR)
+# The config lives under tests/ci/ since the root cleanup. Mull only
+# discovers mull.yml in the cwd or its parents, so without this a clean
+# checkout builds and runs with mull's defaults: the excludePaths
+# filter is lost and the suite's own code gets mutated alongside src/.
+# All mull tools (compiler plugin, runner, reporter) honor MULL_CONFIG.
+export MULL_CONFIG ?= $(CURDIR)/tests/ci/mull.yml
 
 mutation-report: $(TEST_BIN).mull
 	@command -v $(MULL_RUNNER) >/dev/null 2>&1 || { \
