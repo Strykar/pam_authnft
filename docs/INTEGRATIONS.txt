@@ -577,7 +577,7 @@ The exception is claims_tag, which may carry token-derived material
 but membership in the authnft group is exactly what gates a session,
 so the group is the monitored-subject population — group-readable let
 any managed user read every other managed user's claims_tag. That
-contradicted the keyring UID-lock the module advertises (§2, README),
+contradicted the keyring UID-lock the module advertises (§2, ADMIN_GUIDE.md),
 so the file is now root-only.
 
 Non-root observation: a site that needs an unprivileged agent to read

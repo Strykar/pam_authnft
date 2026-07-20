@@ -101,7 +101,7 @@ int session_file_write(pam_handle_t *pamh, const authnft_session_t *sd,
      * gates a session on, so the group IS the monitored-subject population.
      * Group-readable therefore let any managed user read every other
      * managed user's claims, defeating the keyring UID-lock the module
-     * advertises (README "no filesystem footprint"). So the file stays
+     * advertises (docs/ADMIN_GUIDE.md "no filesystem footprint"). So the file stays
      * root-only. A site that wants non-root observation should grant a
      * dedicated observer group distinct from authnft; the group-read bit
      * is retained (mode 0640) so that can be done with an fchown drop-in,
