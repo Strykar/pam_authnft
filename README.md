@@ -77,9 +77,9 @@ to the session without referencing PIDs, UIDs or usernames. The 24-hour
 timeout is a safety net; explicit deletion at logout is the primary
 cleanup.
 
-How the match works, use cases, installation and the full configuration
-reference live in [docs/CONCEPTS.md](docs/CONCEPTS.md) and
-[docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md).
+See [docs/CONCEPTS.md](docs/CONCEPTS.md) for how it works and
+[docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md) for installation and
+configuration.
 
 ## Limitations
 
@@ -103,12 +103,11 @@ reference live in [docs/CONCEPTS.md](docs/CONCEPTS.md) and
 
 ## Documentation and contributing
 
-Every project document is indexed in [docs/](docs/). Start with the
-[roadmap](docs/ROADMAP.md) for what is stable and what is planned, and
-[docs/CONTRIBUTING.txt](docs/CONTRIBUTING.txt) for how to contribute
-and where help is most wanted. Report security issues privately via
-[GitHub Security Advisories](https://github.com/Strykar/pam_authnft/security/advisories);
-[SECURITY.md](SECURITY.md) has the scope and expectations.
+All documentation is indexed in [docs/](docs/); see the
+[roadmap](docs/ROADMAP.md) and [CONTRIBUTING.txt](docs/CONTRIBUTING.txt).
+Report security issues privately via
+[GitHub Security Advisories](https://github.com/Strykar/pam_authnft/security/advisories)
+([SECURITY.md](SECURITY.md)).
 
 ## License
 
