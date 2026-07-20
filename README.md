@@ -83,23 +83,22 @@ configuration.
 
 ## Limitations
 
-- cgroupv2 unified hierarchy only; hybrid setups untested.
-- Hard systemd dependency; non-systemd init is not supported.
-- Fragment syntax errors are caught at load time and logged; semantic
-  errors are the administrator's responsibility.
-- If cleanup fails at logout (say nftables is unavailable), the set
-  element expires after 24 hours via the safety-net timeout on insert.
-  Session JSON orphans are reaped after 7 days by systemd-tmpfiles.
-- The cgroup path is constructed deterministically from the scope unit
-  name at `open_session`. The `socket cgroupv2` match applies to sockets
-  created inside the session scope; sockets that existed before the
-  scope was created (the SSH control connection, for one) carry their
-  original cgroup and are not matched. The module adds `ct state
-  established,related accept` to the shared `filter` chain to handle
-  pre-scope traffic.
-- Transitively included fragments are not validated by pam_authnft for
-  ownership or mode. The admin must ensure every included file is
-  root-owned and not world-writable.
+- Needs the cgroupv2 unified hierarchy. Hybrid setups are untested.
+- Requires systemd. Other init systems are not supported.
+- Syntax errors in a fragment are caught at load time and logged.
+  Semantic mistakes, rules that parse but do the wrong thing, are the
+  administrator's responsibility.
+- If cleanup fails at logout, say because nftables is unavailable, the
+  session's set element expires on its own after 24 hours. Leftover
+  session JSON files are removed after 7 days by systemd-tmpfiles.
+- The match only applies to sockets created inside the session. A
+  socket that existed before the session opened, such as the SSH
+  control connection, keeps the cgroup it was created in and is never
+  matched. The module handles that traffic by adding `ct state
+  established,related accept` to the shared `filter` chain.
+- Fragments may `include` other files, but pam_authnft only checks
+  ownership and mode on the top-level fragment. Keeping every included
+  file root-owned and not world-writable is the administrator's job.
 
 ## Documentation and contributing
 
