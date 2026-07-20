@@ -1,6 +1,6 @@
 # nft-validator survivor audit (post-PR-#52 rebaseline)
 
-**Empirical state:** `validator-mutation.yml` [run 26115718038](https://github.com/identd-ng/pam_authnft/actions/runs/26115718038) on PR #52's branch. 131 mutants total; 80 killed (status=1), 47 survived (status=2), 4 timedout (status=3). Score 61.1% by mull's killed/total formula. All mutants are in `src/nft_validator.c`.
+**Empirical state:** `validator-mutation.yml` [run 26115718038](https://github.com/Strykar/pam_authnft/actions/runs/26115718038) on PR #52's branch. 131 mutants total; 80 killed (status=1), 47 survived (status=2), 4 timedout (status=3). Score 61.1% by mull's killed/total formula. All mutants are in `src/nft_validator.c`.
 
 The Makefile fix from PR #52 un-confounded the survivor set: sanitiser-detectable mutants that tests reach are now killable in principle. This audit classifies each of the 51 survivors into one of:
 

@@ -219,7 +219,7 @@ pattern-rule omission that left the source TU unsanitised.
 Empirical confirmation: a one-line fix propagating
 `$(MULL_EXTRA_CFLAGS)` to the source-TU rule, run against
 the canonical util-validator-mutation.yml via workflow_dispatch
-on the experiment branch ([run 26099584194](https://github.com/identd-ng/pam_authnft/actions/runs/26099584194)),
+on the experiment branch ([run 26099584194](https://github.com/Strykar/pam_authnft/actions/runs/26099584194)),
 killed every mutant: **35/35 status=1, up from 34/35 = 97.1%
 pre-fix**. The line-55 cxx_ge_to_gt mutant — previously the
 sole survivor — is now killed with a UBSan bounds-check
@@ -287,7 +287,7 @@ line 55:18, the `>=` operator).
 #### Original framing (preserved for historical context; do not cite as a current bound)
 
 > The util-validator-mutation workflow's first useful run on
-> PR #50 ([run 26034611767](https://github.com/identd-ng/pam_authnft/actions/runs/26034611767))
+> PR #50 ([run 26034611767](https://github.com/Strykar/pam_authnft/actions/runs/26034611767))
 > showed a line-55 mutant in
 > `util_normalize_ip` (`cxx_ge_to_gt`: `core_len >= sizeof(core)`
 > mutated to `core_len > sizeof(core)`) surviving despite a test
@@ -371,7 +371,7 @@ setting.
 ### Methodological recurrence — scope-transfer error class
 
 Findings 3 and the [ExecutionStatus correction
-in `d93e9bb`](https://github.com/identd-ng/pam_authnft/commit/d93e9bb)
+in `d93e9bb`](https://github.com/Strykar/pam_authnft/commit/d93e9bb)
 are two instances of the same shape of error: applying a
 setting / framing whose scope is regime-A to regime-B without
 re-deriving the scope question. d93e9bb treated two sources of

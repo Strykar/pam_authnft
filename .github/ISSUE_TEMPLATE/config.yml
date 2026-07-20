@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/identd-ng/pam_authnft/security/advisories/new
+    url: https://github.com/Strykar/pam_authnft/security/advisories/new
     about: Report security issues privately via GitHub Security Advisories.
   - name: Questions and usage help
-    url: https://github.com/identd-ng/pam_authnft/discussions
+    url: https://github.com/Strykar/pam_authnft/discussions
     about: Use Discussions for setup help, PAM stack questions, and fragment authoring.

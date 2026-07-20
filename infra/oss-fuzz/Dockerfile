@@ -16,4 +16,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY build.sh $SRC/
 WORKDIR $SRC
-RUN git clone --depth 1 https://github.com/identd-ng/pam_authnft
+RUN git clone --depth 1 https://github.com/Strykar/pam_authnft
