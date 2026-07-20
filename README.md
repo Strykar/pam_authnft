@@ -1,7 +1,6 @@
 # pam_authnft
 
 [![build](https://github.com/Strykar/pam_authnft/actions/workflows/build.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/build.yml)
-[![CIFuzz](https://github.com/Strykar/pam_authnft/actions/workflows/cifuzz.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/cifuzz.yml)
 [![cppcheck](https://github.com/Strykar/pam_authnft/actions/workflows/cppcheck.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/cppcheck.yml)
 [![CodeQL](https://github.com/Strykar/pam_authnft/actions/workflows/codeql.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/codeql.yml)
 [![sanitizers](https://github.com/Strykar/pam_authnft/actions/workflows/sanitizers.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/sanitizers.yml)

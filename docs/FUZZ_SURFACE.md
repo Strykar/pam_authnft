@@ -13,7 +13,7 @@ earned, not assumed.
 
 | Mark | Meaning |
 |---|---|
-| ✅ | Harness exists, property assertions in place, run by CIFuzz on every PR |
+| ✅ | Harness exists, property assertions in place, run nightly and by the per-PR coverage gate |
 | 🟡 | Harness exists but lacks property assertions, OR `make fuzz-coverage` shows the harness reaches < 90% of the targeted function |
 | 🟠 | Function is `static` and needs the `#ifndef FUZZ_BUILD / static / #endif` guard before a harness can target it directly |
 | ❌ | No harness. Listed with priority (High/Med/Low) by attacker reachability |
@@ -194,7 +194,7 @@ Regression inputs preserved at:
 - `tests/fuzz/corpus/substitute_placeholders/regression_oob_unmatched_path`
 - `tests/fuzz/corpus/netlink_diag/regression_oob_alignment_underflow`
 
-CIFuzz re-runs these on every PR.
+The nightly fuzz run and the per-PR coverage-gate corpus replay re-run these.
 
 ## Current coverage (per `make fuzz-coverage-gate`)
 
@@ -311,7 +311,7 @@ Summary. Workflow run time: ~30 min for the full mutation set.
 
 | Channel | Status | Duration | Trigger |
 |---|---|---|---|
-| CIFuzz per-PR | live | 60 s × harness | every pull request |
+| CIFuzz | live | 60 s × harness | manual dispatch (was per-PR; nightly covers it) |
 | Nightly cron (`.github/workflows/fuzz-nightly.yml`) | live | 30 min × harness | daily, 03:17 UTC + manual dispatch |
 | OSS-Fuzz registration (deferred) | submission staged | continuous | once project age threshold met |
 | Self-hosted fuzz farm (optional) | not implemented | always-on | continuous |

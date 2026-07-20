@@ -1,7 +1,10 @@
 name: CIFuzz
+# PR fuzzing moved out of the merge path: an 8-minute wall on every code PR
+# bought little over the nightly (fuzz-nightly.yml runs longer with a
+# persistent corpus and files issues on crashes) and the per-PR coverage
+# gate (fuzz-coverage.yml). Kept for manual smoke runs.
 on:
-  pull_request:
-    branches: [master, main]
+  workflow_dispatch:
 
 permissions:
   contents: read
