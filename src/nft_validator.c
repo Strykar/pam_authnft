@@ -277,7 +277,7 @@ char *substitute_placeholders(const char *src, size_t src_len,
         size_t rlen = strlen(replacements[k]);
         /* LLVM_COV_EXCL_START: the harness passes the production placeholder
          * strings, which are never empty, so this guard is unreachable under
-         * fuzzing. Honored by ci/fuzz-coverage-gate.py. */
+         * fuzzing. Honored by tests/ci/fuzz-coverage-gate.py. */
         if (plen == 0) return NULL;
         /* LLVM_COV_EXCL_STOP */
         if (rlen > max_rep_len) max_rep_len = rlen;
@@ -292,7 +292,7 @@ char *substitute_placeholders(const char *src, size_t src_len,
     size_t max_expand = src_len * ratio + 1;
     char *out = malloc(max_expand);
     /* LLVM_COV_EXCL_START: allocation-failure guard; libFuzzer does not
-     * inject malloc failure (audit/malloc_fail.so covers it separately). */
+     * inject malloc failure (tests/audit/malloc_fail.so covers it separately). */
     if (!out) return NULL;
     /* LLVM_COV_EXCL_STOP */
 
@@ -326,7 +326,7 @@ char *substitute_placeholders(const char *src, size_t src_len,
              * — each source byte is budgeted `ratio`, which is >= its own
              * worst-case expansion, so no write can exceed the buffer. Kept as
              * defense in depth against a future ratio-math bug. Honored by
-             * ci/fuzz-coverage-gate.py (stock llvm-cov ignores these markers). */
+             * tests/ci/fuzz-coverage-gate.py (stock llvm-cov ignores these markers). */
             if (wi + 1 >= max_expand) {
                 free(out);
                 return NULL;

@@ -36,4 +36,4 @@ jobs:
             build-essential pkg-config binutils \
             libnftables-dev libseccomp-dev libsystemd-dev libpam0g-dev libcap-dev libaudit-dev
       - name: Assert every linked library is inventoried in THIRD_PARTY.md
-        run: ./ci/thirdparty-check.sh
+        run: ./tests/ci/thirdparty-check.sh

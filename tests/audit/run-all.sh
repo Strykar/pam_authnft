@@ -23,7 +23,7 @@
 # Aggregated verdict: non-zero if any enabled part fails (A + C by default).
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 SO="$(pwd)/pam_authnft.so"
 FAIL=0
 hdr() { printf '\n########## %s ##########\n' "$*"; }
@@ -60,8 +60,8 @@ else
     hdr "PART B: integration suite — SKIPPED (set AUDIT_RUN_INTEGRATION=1; runs in the tier-2 microVM)"
 fi
 
-hdr "PART C: fault matrix under leak detectors (audit/run-audit.sh)"
-if ./audit/run-audit.sh; then
+hdr "PART C: fault matrix under leak detectors (tests/audit/run-audit.sh)"
+if ./tests/audit/run-audit.sh; then
     echo "[part C] PASS"
 else
     echo "[part C] FAIL"; FAIL=1

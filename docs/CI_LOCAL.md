@@ -49,11 +49,11 @@ separate package set from the host.
 
 ## The fault matrix (tier 1)
 
-`audit/nft_fault_driver.c` links the production objects under
+`tests/audit/nft_fault_driver.c` links the production objects under
 `-fsanitize=address,undefined` and drives `nft_handler_setup`'s returns
 directly, with a real PAM handle so the module's logging is safe. The
 call-2 and handle-parse returns (which need call 1 to succeed first) are
-driven by `audit/nft_fail.so`, an LD_PRELOAD interposer that fails the
+driven by `tests/audit/nft_fail.so`, an LD_PRELOAD interposer that fails the
 jump-rule command or corrupts the echo handle. The sanitizer — not the
 script — owns the leak verdict (the process exits non-zero if
 LeakSanitizer finds a definite leak). All five returns are leak-free on
@@ -112,23 +112,23 @@ git push                             # no re-run by default
 AUTHNFT_AUDIT_ON_PUSH=1 git push     # opt-in: re-run tier-1 at push
 ```
 
-The gate is **pre-commit**: every commit that touches `src/ include/ audit/
-ci/ tests/ Makefile Containerfile mull.yml pam_authnft.map` runs the tier-1
+The gate is **pre-commit**: every commit that touches `src/ include/
+tests/ Makefile` runs the tier-1
 audit and is blocked on failure. Doc-only commits skip it, so writing docs
 stays instant.
 
 ## Files
 
 ```
-audit/nft_fault_driver.c   fault driver (ASan/UBSan), drives the error returns
-audit/nft_fail.c           LD_PRELOAD libnftables interposer (call-2 / handle-parse)
-audit/malloc_fail.c        LD_PRELOAD fail-Nth-allocation interposer (manual)
-audit/run-all.sh           orchestrator: Part A unit/seccomp + Part C fault matrix
-audit/run-audit.sh         in-substrate orchestrator (container)
-ci/musl-test.sh            tier-M musl build + unit suite (Alpine container)
+tests/audit/nft_fault_driver.c   fault driver (ASan/UBSan), drives the error returns
+tests/audit/nft_fail.c           LD_PRELOAD libnftables interposer (call-2 / handle-parse)
+tests/audit/malloc_fail.c        LD_PRELOAD fail-Nth-allocation interposer (manual)
+tests/audit/run-all.sh           orchestrator: Part A unit/seccomp + Part C fault matrix
+tests/audit/run-audit.sh         in-substrate orchestrator (container)
+tests/ci/musl-test.sh            tier-M musl build + unit suite (Alpine container)
 .githooks/pre-commit       runs tier-1 audit on every code commit
 .githooks/pre-push         opt-in tier-1 at push
-Containerfile              'audit' workflow case
+tests/container/Containerfile  'audit' workflow case
 Makefile                   audit / audit-container / test-packet-match / install-hooks
 ```
 
@@ -149,7 +149,7 @@ Makefile                   audit / audit-container / test-packet-match / install
   default) because that substrate has host-environment coupling (umask,
   file ownership) the dedicated container avoids. Wiring it into Part B is follow-on work; run it via
   `make test-integration-container` / `sudo make test-integration`.
-- `audit/malloc_fail.so` (fail-Nth-allocation interposer) is a **manual**
+- `tests/audit/malloc_fail.so` (fail-Nth-allocation interposer) is a **manual**
   targeted tool, not part of the automated gate: a blind sweep fails
   loader/libc/PAM startup allocations before any module code, so it cannot
   tell a module bug from process-startup noise. Use it to confirm a

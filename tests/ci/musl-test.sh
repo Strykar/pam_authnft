@@ -9,9 +9,9 @@
 # exercises the setup-path syscall classes under the sandbox.
 #
 # Uses apk inside a throwaway Alpine container — a separate package ecosystem
-# from the host's pacman. Run: ci/musl-test.sh [repo-dir]
+# from the host's pacman. Run: tests/ci/musl-test.sh [repo-dir]
 set -e
-REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+REPO="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 IMG="${MUSL_IMAGE:-docker.io/library/alpine:3.21}"
 
 exec "${CONTAINER_ENGINE:-podman}" run --rm \

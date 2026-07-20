@@ -1,7 +1,7 @@
 name: fuzz-nightly
 # Sustained fuzzing — finds bugs that the per-PR 60-second CIFuzz
 # window can't reach. Runs every harness for 30 minutes against the
-# corpus checked in at fuzz/corpus/. On a crash, files an issue on
+# corpus checked in at tests/fuzz/corpus/. On a crash, files an issue on
 # the repo with the harness name, the ASan/UBSan output, and the
 # minimized reproducer attached as a workflow artefact.
 #
@@ -94,7 +94,7 @@ jobs:
       - name: Restore corpus cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: fuzz/corpus-cache/${{ matrix.harness }}
+          path: tests/fuzz/corpus-cache/${{ matrix.harness }}
           key: fuzz-corpus-${{ matrix.harness }}-${{ github.run_id }}
           restore-keys: |
             fuzz-corpus-${{ matrix.harness }}-
@@ -102,29 +102,29 @@ jobs:
       - name: Fuzz ${{ matrix.harness }}
         id: fuzz
         run: |
-          mkdir -p fuzz/crashes "fuzz/corpus-cache/${HARNESS_NAME}"
-          seed_dir="fuzz/corpus/${HARNESS_NAME#fuzz_}"
+          mkdir -p tests/fuzz/crashes "tests/fuzz/corpus-cache/${HARNESS_NAME}"
+          seed_dir="tests/fuzz/corpus/${HARNESS_NAME#fuzz_}"
           [ -d "$seed_dir" ] || seed_dir=""
           # libFuzzer writes newly discovered inputs into the FIRST corpus dir
           # on argv, so the persisted cache dir goes first and the git-tracked
-          # seeds second — fuzz/corpus/ is only read, never written, which keeps
+          # seeds second — tests/fuzz/corpus/ is only read, never written, which keeps
           # it out of the way of the coverage gate that replays it.
           # libFuzzer exit codes:
           #   0   timed-out cleanly (-max_total_time)
           #   77  crash (the bug we want)
           #   any other non-zero — assume crash too
           set +e
-          ./fuzz/out/${HARNESS_NAME} \
+          ./tests/fuzz/out/${HARNESS_NAME} \
             -max_total_time=${SECONDS_LIMIT} \
-            -artifact_prefix=fuzz/crashes/${HARNESS_NAME}- \
-            "fuzz/corpus-cache/${HARNESS_NAME}" $seed_dir \
-            > fuzz/crashes/${HARNESS_NAME}.log 2>&1
+            -artifact_prefix=tests/fuzz/crashes/${HARNESS_NAME}- \
+            "tests/fuzz/corpus-cache/${HARNESS_NAME}" $seed_dir \
+            > tests/fuzz/crashes/${HARNESS_NAME}.log 2>&1
           ec=$?
           set -e
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
           if [ "$ec" -ne 0 ]; then
             echo "::warning::${HARNESS_NAME} exited $ec — crash artefact uploaded"
-            tail -200 fuzz/crashes/${HARNESS_NAME}.log
+            tail -200 tests/fuzz/crashes/${HARNESS_NAME}.log
             exit 1
           fi
         env:
@@ -142,10 +142,10 @@ jobs:
           HARNESS_NAME: ${{ matrix.harness }}
         run: |
           set -euo pipefail
-          cache_dir="fuzz/corpus-cache/${HARNESS_NAME}"
+          cache_dir="tests/fuzz/corpus-cache/${HARNESS_NAME}"
           [ -d "$cache_dir" ] || exit 0
           min="$(mktemp -d)"
-          ./fuzz/out/${HARNESS_NAME} -merge=1 "$min" "$cache_dir"
+          ./tests/fuzz/out/${HARNESS_NAME} -merge=1 "$min" "$cache_dir"
           find "$cache_dir" -mindepth 1 -delete
           cp -a "$min/." "$cache_dir/"
 
@@ -157,7 +157,7 @@ jobs:
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: fuzz/corpus-cache/${{ matrix.harness }}
+          path: tests/fuzz/corpus-cache/${{ matrix.harness }}
           key: fuzz-corpus-${{ matrix.harness }}-${{ github.run_id }}
 
       - name: Upload artefacts
@@ -166,7 +166,7 @@ jobs:
         with:
           name: ${{ matrix.harness }}-artefacts
           path: |
-            fuzz/crashes/
+            tests/fuzz/crashes/
           retention-days: 14
 
       - name: File crash issue
@@ -176,7 +176,7 @@ jobs:
           script: |
             const fs = require('fs');
             const harness = '${{ matrix.harness }}';
-            const logPath = `fuzz/crashes/${harness}.log`;
+            const logPath = `tests/fuzz/crashes/${harness}.log`;
             let log = '';
             try { log = fs.readFileSync(logPath, 'utf8').slice(-8000); }
             catch (e) { log = '(log unavailable)'; }
@@ -184,7 +184,7 @@ jobs:
             // Find the crash artefact (libFuzzer writes crash-<sha>).
             let artefact = '(none)';
             try {
-              const files = fs.readdirSync('fuzz/crashes')
+              const files = fs.readdirSync('tests/fuzz/crashes')
                 .filter(f => f.startsWith(`${harness}-crash-`));
               if (files.length) artefact = files.join(', ');
             } catch (e) { /* ignore */ }
@@ -205,8 +205,8 @@ jobs:
               ``,
               `Triage: download the artefact, save the \`crash-*\` input,`,
               `replay locally with`,
-              `\`./fuzz/out/${harness} <crash-input>\`. Add the input to`,
-              `\`fuzz/corpus/${harness.replace('fuzz_', '')}/regression_*\``,
+              `\`./tests/fuzz/out/${harness} <crash-input>\`. Add the input to`,
+              `\`tests/fuzz/corpus/${harness.replace('fuzz_', '')}/regression_*\``,
               `once the underlying bug is fixed.`,
             ].join('\n');
 

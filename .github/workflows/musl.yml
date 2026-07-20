@@ -34,4 +34,4 @@ jobs:
         # Stage 13 exercises the setup-path syscalls under the sandbox. Catches
         # libc-specific seccomp allowlist gaps (open/readv/writev class) that
         # the glibc-only jobs cannot. Reuses the same script as `make test-musl`.
-        run: CONTAINER_ENGINE=docker ci/musl-test.sh "$GITHUB_WORKSPACE"
+        run: CONTAINER_ENGINE=docker tests/ci/musl-test.sh "$GITHUB_WORKSPACE"

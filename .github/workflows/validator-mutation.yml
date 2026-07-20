@@ -20,7 +20,7 @@ on:
       - 'include/nft_validator.h'
       - 'tests/test_nft_validator.c'
       - 'Makefile'
-      - 'mull.yml'
+      - 'tests/ci/mull.yml'
       - '.github/workflows/validator-mutation.yml'
   workflow_dispatch:
 
@@ -70,7 +70,9 @@ jobs:
       - name: Build mull + ASan validator test binary
         env:
           MULL_EXTRA_CFLAGS: "-fsanitize=address,undefined -fno-omit-frame-pointer"
-        run: make test_nft_validator.mull
+        run: |
+          cp tests/ci/mull.yml mull.yml
+          make test_nft_validator.mull
 
       - name: Run mull-runner
         id: mull

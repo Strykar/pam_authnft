@@ -35,7 +35,7 @@ jobs:
     # Cadence: per PR (plus dispatch + nightly). The systemd-in-podman boot was
     # proven green on a hosted runner before promoting this to a PR gate; that
     # run also surfaced and fixed the runner's lack of Containerfile-heredoc
-    # support (scripts moved to container/ and COPY'd).
+    # support (scripts moved to tests/container/ and COPY'd).
     strategy:
       fail-fast: false
       matrix:

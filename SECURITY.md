@@ -45,9 +45,7 @@ minimal reproducer, kernel version, nftables version, and the PAM service
 stack (`/etc/pam.d/<service>`) in use.
 
 Public issues and pull requests are not the right channel for vulnerability
-reports. Backup contact channels and any PGP details live in the
-RFC 9116 security.txt at
-<https://github.com/Strykar/pam_authnft/blob/main/.well-known/security.txt>.
+reports; use the advisory form above.
 
 ## Response timeline
 
@@ -69,8 +67,7 @@ the disclosure window unilaterally; the maintainer will rush a fix in
 parallel.
 
 Reports that are not acknowledged within 14 days SHOULD be re-sent or
-escalated via the email contact in
-<https://github.com/Strykar/pam_authnft/blob/main/.well-known/security.txt>.
+escalated by email to the maintainer listed in the repository metadata.
 
 ## Incident response runbook
 

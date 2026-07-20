@@ -55,9 +55,9 @@ PAM
 # --- build: production .so + ASan/UBSan fault driver + preload ---
 note "build: production .so, ASan fault driver, malloc-fail preload"
 make pam_authnft.so          >/dev/null 2>/tmp/b1.log || { bad "build .so";          cat /tmp/b1.log; }
-make audit/nft_fault_driver  >/dev/null 2>/tmp/b2.log || { bad "build fault driver"; cat /tmp/b2.log; }
-make audit/malloc_fail.so    >/dev/null 2>/tmp/b3.log || { bad "build malloc preload"; cat /tmp/b3.log; }
-make audit/nft_fail.so       >/dev/null 2>/tmp/b4.log || { bad "build nft preload";    cat /tmp/b4.log; }
+make tests/audit/nft_fault_driver  >/dev/null 2>/tmp/b2.log || { bad "build fault driver"; cat /tmp/b2.log; }
+make tests/audit/malloc_fail.so    >/dev/null 2>/tmp/b3.log || { bad "build malloc preload"; cat /tmp/b3.log; }
+make tests/audit/nft_fail.so       >/dev/null 2>/tmp/b4.log || { bad "build nft preload";    cat /tmp/b4.log; }
 [ "$FAIL" -eq 0 ] || { note "AUDIT RESULT: FAIL (build)"; exit 1; }
 
 # --- detector configuration ---
@@ -93,7 +93,7 @@ export AUTHNFT_NO_SANDBOX=1
 #   $2 scen     driver scenario (happy|truncate|nftfail)
 #   $3 scope    yes -> run inside a real transient scope so call 1 can
 #               succeed (needed to reach the post-call-1 returns); no -> bare
-#   $4 preload  optional interposer .so under audit/ (e.g. nft_fail.so)
+#   $4 preload  optional interposer .so under tests/audit/ (e.g. nft_fail.so)
 #   $5 extraenv optional extra env for the interposer (e.g. AUTHNFT_NFT_FAIL_ON=jump)
 # The sanitizer owns the verdict (non-zero exit on a definite leak / UB).
 run_scen() {
@@ -107,16 +107,16 @@ run_scen() {
     # gcc -print-file-name=libasan.so returns a linker script on Fedora).
     if [ -n "$preload" ]; then
         local libasan
-        libasan="$(ldd ./audit/nft_fault_driver 2>/dev/null | awk '/libasan/{print $3; exit}')"
-        pre="LD_PRELOAD=${libasan}:$PWD/audit/$preload"
+        libasan="$(ldd ./tests/audit/nft_fault_driver 2>/dev/null | awk '/libasan/{print $3; exit}')"
+        pre="LD_PRELOAD=${libasan}:$PWD/tests/audit/$preload"
     fi
     if [ "$scope" = yes ]; then
         systemd-run --scope --quiet --slice=authnft.slice --unit=authnft-audit \
             --property=Delegate=yes \
-            env $pre $extra ./audit/nft_fault_driver "$scen" "$USER_AUDIT" \
+            env $pre $extra ./tests/audit/nft_fault_driver "$scen" "$USER_AUDIT" \
             >"$out" 2>&1 || rc=$?
     else
-        env $pre $extra ./audit/nft_fault_driver "$scen" "$USER_AUDIT" \
+        env $pre $extra ./tests/audit/nft_fault_driver "$scen" "$USER_AUDIT" \
             >"$out" 2>&1 || rc=$?
     fi
     if [ "$rc" -eq 0 ]; then
@@ -174,7 +174,7 @@ else
 fi
 nft delete table inet authnft 2>/dev/null || true
 
-# The fail-Nth-allocation interposer (audit/malloc_fail.so) is built above
+# The fail-Nth-allocation interposer (tests/audit/malloc_fail.so) is built above
 # but deliberately NOT run as a blind automated sweep: failing arbitrary
 # allocations across the whole process hits loader/libc/PAM startup
 # allocations long before any module code, so a blind sweep reports
@@ -182,7 +182,7 @@ nft delete table inet authnft 2>/dev/null || true
 # manual tool — e.g. to confirm a specific allocation-failure return:
 #
 #   AUTHNFT_MALLOC_FAIL_AT=<n> AUTHNFT_MALLOC_FAIL_VERBOSE=1 \
-#     LD_PRELOAD=$PWD/audit/malloc_fail.so \
+#     LD_PRELOAD=$PWD/tests/audit/malloc_fail.so \
 #     pamtester -I rhost=127.0.0.1 authnft_test "$USER_AUDIT" open_session
 #
 # pick <n> from a run that prints each allocation index, find the one in

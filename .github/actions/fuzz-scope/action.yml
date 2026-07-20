@@ -9,8 +9,8 @@
 #
 # Fails safe: a file is treated as irrelevant only when it is provably so
 # (documentation, data/ runtime config, or a workflow file other than the two
-# that define the fuzz jobs). Everything else — src/, include/, fuzz/, Makefile,
-# tests/, ci/, cifuzz.yml, fuzz-coverage.yml, and any path nobody anticipated —
+# that define the fuzz jobs). Everything else — src/, include/, Makefile,
+# tests/ (fuzz harnesses, ci scripts, suites included), cifuzz.yml, fuzz-coverage.yml, and any path nobody anticipated —
 # is relevant, so an unfamiliar change runs the fuzzers rather than skipping them.
 #
 # Subsumes the docs-only guard for these two jobs: a docs-only diff is also
@@ -45,7 +45,7 @@ runs:
             case "$1" in
                 .github/workflows/cifuzz.yml|.github/workflows/fuzz-coverage.yml)
                     return 1 ;;
-                docs/*|*.md|.well-known/*|LICENSE)                 return 0 ;;
+                docs/*|*.md|LICENSE)                 return 0 ;;
                 data/*)                                            return 0 ;;
                 .github/workflows/*.yml|.github/workflows/*.yaml)  return 0 ;;
                 .github/dependabot.yml|.github/ISSUE_TEMPLATE/*)   return 0 ;;

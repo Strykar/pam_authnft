@@ -37,14 +37,14 @@ Layout
     tests/             unit + pamtester integration harness
     data/authnft.slice parent slice unit
     examples/          fragment generator
-    pam_authnft.map    exported symbol whitelist (exactly two entries)
+    src/pam_authnft.map exported symbol whitelist (exactly two entries)
 
 
 Invariants to preserve
 ----------------------
 
 1. Exported symbols are `pam_sm_open_session` and `pam_sm_close_session`
-   only. Adding a new PAM hook requires editing `pam_authnft.map`.
+   only. Adding a new PAM hook requires editing `src/pam_authnft.map`.
 
 2. Lifecycle order in `pam_sm_open_session` is fixed: validate user →
    root bypass → parse `PAM_RHOST` → `sandbox_apply` → `bus_handler_start`

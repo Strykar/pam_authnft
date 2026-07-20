@@ -32,14 +32,14 @@ sshd's privsep monitor. Review with that threat model in mind.
   and cleanup traps; scaffolding follows `tests/integration_test.sh`.
 - Defensive branches that are provably unreachable under fuzzing are
   marked `LLVM_COV_EXCL_START/STOP` and excluded by
-  `ci/fuzz-coverage-gate.py`; the markers are intentional, not dead code
+  `tests/ci/fuzz-coverage-gate.py`; the markers are intentional, not dead code
   to delete.
 
 ## CI context
 
 Workflows are hash-pinned and least-privilege (`permissions: contents:
 read`). The fuzz-coverage gate replays only the committed corpus; corpus
-files under `fuzz/corpus/*/seed_*` are deterministic fixtures, not noise.
+files under `tests/fuzz/corpus/*/seed_*` are deterministic fixtures, not noise.
 `tests/packet_match_headless.sh` (via `make test-packet-match`) is how an
 admin verifies their kernel really matches `socket cgroupv2` on INPUT; it is
 run by hand on the target host, not in CI.

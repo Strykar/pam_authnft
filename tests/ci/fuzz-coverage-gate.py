@@ -20,7 +20,7 @@
 import json, subprocess, glob, os, sys
 
 THRESHOLD = 90.0
-COV = "fuzz/coverage"
+COV = "tests/fuzz/coverage"
 # The fuzzed functions the FUZZ_SURFACE status legend applies to.
 TARGETS = {
     "util_is_valid_username", "util_normalize_ip", "validate_cgroup_path",
@@ -64,7 +64,7 @@ def build_harnesses():
         obj = f"{COV}/obj/{os.path.basename(src)[:-2]}.o"
         subprocess.run(["clang"] + COV_CFLAGS + pkgc + ["-c", src, "-o", obj], check=True)
         objs.append(obj)
-    for hsrc in sorted(glob.glob("fuzz/fuzz_*.c")):
+    for hsrc in sorted(glob.glob("tests/fuzz/fuzz_*.c")):
         out = f"{COV}/{os.path.basename(hsrc)[:-2]}"
         subprocess.run(["clang"] + COV_CFLAGS + ["-fsanitize=fuzzer"] + pkgc
                        + [hsrc] + objs + pkgl + ["-o", out], check=True)
@@ -80,7 +80,7 @@ def main():
         os.remove(f)
     for b in bins:
         h = os.path.basename(b)
-        corpus = f"fuzz/corpus/{h[len('fuzz_'):]}"
+        corpus = f"tests/fuzz/corpus/{h[len('fuzz_'):]}"
         # Replay only git-TRACKED corpus files, passed as explicit file
         # arguments. Passing the directory replays untracked local fuzz
         # leftovers too, which once made a thin committed corpus look

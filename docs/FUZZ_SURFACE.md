@@ -190,9 +190,9 @@ the case for fuzzing self-evident.
 | `validate_cgroup_path` (found by inspection during refactor for `fuzz_cgroup_path`, not by fuzzing) | Off-by-one in length check: `if (first_len != 14 \|\| memcmp(p, "authnft.slice", 14) != 0)`. The string `"authnft.slice"` is 13 characters, so the check rejected every valid input. Latent bug — production never called the function (the K1 fix migrated `pam_entry.c` to deterministic `snprintf` construction of the cgroup path), and the unit test only verifies that the function REJECTS non-authnft.slice inputs (it expects rejection by design, so universal-rejection looked correct). Fixed: change `14` to `13` in both the length check and the `memcmp` length. | Low — dead code in production. Logic-bug class that `make fuzz-coverage` would not have caught alone, but the refactor-to-fuzz-it process surfaced it. | this PR |
 
 Regression inputs preserved at:
-- `fuzz/corpus/substitute_placeholders/regression_oob_terminator`
-- `fuzz/corpus/substitute_placeholders/regression_oob_unmatched_path`
-- `fuzz/corpus/netlink_diag/regression_oob_alignment_underflow`
+- `tests/fuzz/corpus/substitute_placeholders/regression_oob_terminator`
+- `tests/fuzz/corpus/substitute_placeholders/regression_oob_unmatched_path`
+- `tests/fuzz/corpus/netlink_diag/regression_oob_alignment_underflow`
 
 CIFuzz re-runs these on every PR.
 
@@ -231,7 +231,7 @@ this way.
 
 † `substitute_placeholders`'s defensive guards that the fuzz harness cannot
 reach are marked `LLVM_COV_EXCL_START/STOP` and dropped by the gate. Stock
-llvm-cov ignores those markers, so `ci/fuzz-coverage-gate.py` honors them
+llvm-cov ignores those markers, so `tests/ci/fuzz-coverage-gate.py` honors them
 itself. Six guards are excluded: the three in-loop
 `if (wi ... >= max_expand) { free(); return NULL; }` overflow checks,
 unreachable because the `max_expand` ratio bound budgets `ratio` per source
@@ -239,7 +239,7 @@ byte (`>=` that byte's worst-case expansion, so no write can exceed the
 allocation); the empty-placeholder check, which never fires because the harness
 passes the production placeholder strings; the `src_len * ratio` overflow
 guard, unreachable because a fuzz input cannot be `SIZE_MAX`-scale; and the
-malloc-failure guard, which libFuzzer does not exercise (audit/malloc_fail.so
+malloc-failure guard, which libFuzzer does not exercise (tests/audit/malloc_fail.so
 can drive it by hand, but that tool is manual and no gate runs it, so this
 guard is untested rather than covered). What remains is the reachable state
 machine and matcher, which the committed corpus drives above the bar.
@@ -326,11 +326,11 @@ repos; rationale and cost notes are in the workflow header.
 1. **Refactor**: if the target function is `static`, wrap with
    `#ifndef FUZZ_BUILD / static / #endif`. The non-fuzz build is
    bit-identical because `FUZZ_BUILD` is undefined.
-2. **Write the harness** in `fuzz/fuzz_<name>.c`. Include
+2. **Write the harness** in `tests/fuzz/fuzz_<name>.c`. Include
    property assertions (`__builtin_trap()` on invariant violation),
    not just `LLVMFuzzerTestOneInput` returning 0.
 3. **Add to `Makefile`**: append to `FUZZ_TARGETS`.
-4. **Add to `infra/oss-fuzz/build.sh`**: one extra `$CC` invocation.
+4. **Add to `tests/fuzz/oss-fuzz/build.sh`**: one extra `$CC` invocation.
 5. **Add to `.github/workflows/cifuzz.yml`**: one extra step running
    the new binary with `-max_total_time=60`.
 6. **Run `make fuzz-coverage`**: verify the harness reaches the

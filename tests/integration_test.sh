@@ -884,7 +884,7 @@ else
 fi
 
 # 10.22-10.24: run_sandboxed_nft_setup's error branches, reached with an
-# LD_PRELOAD fault injector (the way audit/nft_fail.c injects libnftables
+# LD_PRELOAD fault injector (the way tests/audit/nft_fail.c injects libnftables
 # failures). A real allowlist gap (SIGSYS) or fd/process exhaustion would hit
 # these in the field but can't be triggered deterministically; the preload can.
 FAULT_PRELOAD=/tmp/fault_preload.so

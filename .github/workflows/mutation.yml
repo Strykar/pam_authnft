@@ -62,7 +62,9 @@ jobs:
           "mull-runner-${MULL_LLVM_MAJOR}" --version
 
       - name: Build mull-instrumented test binary
-        run: make authnft_test.mull
+        run: |
+          cp tests/ci/mull.yml mull.yml
+          make authnft_test.mull
 
       - name: Run mull
         id: mull

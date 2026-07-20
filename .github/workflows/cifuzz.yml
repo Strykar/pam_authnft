@@ -47,78 +47,78 @@ jobs:
       - name: Fuzz util_is_valid_username + util_normalize_ip (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/username fuzz/crashes
-          ./fuzz/out/fuzz_username \
+          mkdir -p tests/fuzz/corpus/username tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_username \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/username- \
-            fuzz/corpus/username/
+            -artifact_prefix=tests/fuzz/crashes/username- \
+            tests/fuzz/corpus/username/
 
       - name: Fuzz validate_fragment_content (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/fragment fuzz/crashes
-          ./fuzz/out/fuzz_fragment \
+          mkdir -p tests/fuzz/corpus/fragment tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_fragment \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/fragment- \
-            fuzz/corpus/fragment/
+            -artifact_prefix=tests/fuzz/crashes/fragment- \
+            tests/fuzz/corpus/fragment/
 
       - name: Fuzz substitute_placeholders (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/substitute_placeholders fuzz/crashes
-          ./fuzz/out/fuzz_substitute_placeholders \
+          mkdir -p tests/fuzz/corpus/substitute_placeholders tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_substitute_placeholders \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/substitute_placeholders- \
-            fuzz/corpus/substitute_placeholders/
+            -artifact_prefix=tests/fuzz/crashes/substitute_placeholders- \
+            tests/fuzz/corpus/substitute_placeholders/
 
       - name: Fuzz peer_parse_diag_chunk (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/netlink_diag fuzz/crashes
-          ./fuzz/out/fuzz_netlink_diag \
+          mkdir -p tests/fuzz/corpus/netlink_diag tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_netlink_diag \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/netlink_diag- \
-            fuzz/corpus/netlink_diag/
+            -artifact_prefix=tests/fuzz/crashes/netlink_diag- \
+            tests/fuzz/corpus/netlink_diag/
 
       - name: Fuzz keyring_sanitize (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/keyring_sanitize fuzz/crashes
-          ./fuzz/out/fuzz_keyring_sanitize \
+          mkdir -p tests/fuzz/corpus/keyring_sanitize tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_keyring_sanitize \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/keyring_sanitize- \
-            fuzz/corpus/keyring_sanitize/
+            -artifact_prefix=tests/fuzz/crashes/keyring_sanitize- \
+            tests/fuzz/corpus/keyring_sanitize/
 
       - name: Fuzz corr_sanitize_copy (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/correlation_capture fuzz/crashes
-          ./fuzz/out/fuzz_correlation_capture \
+          mkdir -p tests/fuzz/corpus/correlation_capture tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_correlation_capture \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/correlation_capture- \
-            fuzz/corpus/correlation_capture/
+            -artifact_prefix=tests/fuzz/crashes/correlation_capture- \
+            tests/fuzz/corpus/correlation_capture/
 
       - name: Fuzz validate_cgroup_path (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/cgroup_path fuzz/crashes
-          ./fuzz/out/fuzz_cgroup_path \
+          mkdir -p tests/fuzz/corpus/cgroup_path tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_cgroup_path \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/cgroup_path- \
-            fuzz/corpus/cgroup_path/
+            -artifact_prefix=tests/fuzz/crashes/cgroup_path- \
+            tests/fuzz/corpus/cgroup_path/
 
       - name: Fuzz parse_socket_inode (60s)
         if: steps.scope.outputs.relevant == 'true'
         run: |
-          mkdir -p fuzz/corpus/socket_inode fuzz/crashes
-          ./fuzz/out/fuzz_socket_inode \
+          mkdir -p tests/fuzz/corpus/socket_inode tests/fuzz/crashes
+          ./tests/fuzz/out/fuzz_socket_inode \
             -max_total_time=60 \
-            -artifact_prefix=fuzz/crashes/socket_inode- \
-            fuzz/corpus/socket_inode/
+            -artifact_prefix=tests/fuzz/crashes/socket_inode- \
+            tests/fuzz/corpus/socket_inode/
 
       - name: Upload crash artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure()
         with:
           name: fuzz-crashes
-          path: fuzz/crashes/
+          path: tests/fuzz/crashes/
