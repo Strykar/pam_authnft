@@ -35,3 +35,4 @@ tests/fuzz/corpus-cache/
 
 # CI stages a working copy of tests/ci/mull.yml here for mull discovery.
 /mull.yml
+*.mull
