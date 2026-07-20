@@ -311,7 +311,7 @@ Summary. Workflow run time: ~30 min for the full mutation set.
 
 | Channel | Status | Duration | Trigger |
 |---|---|---|---|
-| CIFuzz | live | 60 s × harness | manual dispatch (was per-PR; nightly covers it) |
+| CIFuzz | live | 60 s × harness | every push to main (post-merge; was per-PR) |
 | Nightly cron (`.github/workflows/fuzz-nightly.yml`) | live | 30 min × harness | daily, 03:17 UTC + manual dispatch |
 | OSS-Fuzz registration (deferred) | submission staged | continuous | once project age threshold met |
 | Self-hosted fuzz farm (optional) | not implemented | always-on | continuous |

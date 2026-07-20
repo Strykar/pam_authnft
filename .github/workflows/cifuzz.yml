@@ -1,9 +1,13 @@
 name: CIFuzz
-# PR fuzzing moved out of the merge path: an 8-minute wall on every code PR
-# bought little over the nightly (fuzz-nightly.yml runs longer with a
-# persistent corpus and files issues on crashes) and the per-PR coverage
-# gate (fuzz-coverage.yml). Kept for manual smoke runs.
+# Fuzzes committed code, not proposed code. PR fuzzing was an 8-minute
+# wall on every code PR and bought little over the nightly
+# (fuzz-nightly.yml runs longer with a persistent corpus and files
+# issues on crashes) and the per-PR coverage gate (fuzz-coverage.yml).
+# Instead every commit that lands on main is fuzzed post-merge, where
+# it blocks nothing.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
