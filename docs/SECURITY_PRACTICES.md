@@ -26,7 +26,7 @@ column lists the bug class or signal each tool produces.
 | **AddressSanitizer + UBSan + LeakSanitizer** | `.github/workflows/sanitizers.yml` | every PR | `sanitizer-link` proves the .so links under each sanitizer; `sanitized-tests` runs the unit suite under ASan+UBSan+LSan in `AUTHNFT_AUDIT_MODE=1` (which skips the two seccomp stages that conflict with the sanitizer runtime, and the checksec stage, whose hardening flags the sanitizer build does not carry), giving real leak-checked execution of the sanitization, cgroup-path, rhost, netlink peer-parser, keyring, and inode-cap paths |
 | **OpenSSF Scorecard** | `.github/workflows/scorecard.yml` | weekly cron + push | supply-chain hygiene (pinned action versions, branch protection, signed releases, dangerous workflows) |
 | **OpenSSF Best Practices** | bestpractices.dev project 12496 | manual self-attest | governance / policy items the badge program tracks |
-| **CIFuzz** | `.github/workflows/cifuzz.yml` | every PR | 60 s × 8 fuzz harnesses (memory-safety regressions) |
+| **CIFuzz** | `.github/workflows/cifuzz.yml` | every push to main | 60 s × 8 fuzz harnesses (nightly fuzzing is fuzz-nightly.yml) |
 | **Nightly fuzz cron** | `.github/workflows/fuzz-nightly.yml` | daily 03:17 UTC | 30 min × 8 fuzz harnesses (deeper bugs that 60 s won't surface), auto-issue on crash |
 | **Mutation testing (mull)** | `.github/workflows/mutation.yml` + `make mutation-report` | weekly Sunday 06:43 UTC | LLVM-IR mutations across `src/*.c` + `tests/test_suite.c`; surviving mutations indicate either coverage gaps or dead code |
 | **Differential oracle** | `tests/oracle/`, run via `make test` | every PR | logic bugs in 5 small parsers (C vs Python re-implementation diff) |

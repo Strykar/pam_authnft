@@ -8,6 +8,30 @@ via libnftables. Changes to any of those three surfaces have narrow
 tolerances — read this file before opening a pull request.
 
 
+Where help is most wanted
+-------------------------
+
+Patches, testing on new distros and kernels, and integration
+experiments are welcome:
+
+  - Packaging: AUR, Debian, Fedora COPR, NixOS, Gentoo ebuilds.
+  - Distro and kernel testing, especially non-Fedora systemd distros
+    and kernels newer than 6.x.
+  - Integration prototypes: if you maintain a PAM module, VPN daemon,
+    or AAA stack and want to try the claims_env path, seed
+    AUTHNFT_CORRELATION for audit joining, or drive fragment
+    generation, open an issue describing the use case.
+  - Fuzzing: the eight harnesses in tests/fuzz/ all clear the 90%
+    region-coverage gate (see FUZZ_SURFACE.md). Wanted: harnesses for
+    functions not yet on that surface map, and property assertions for
+    the crash-only harnesses.
+  - Documentation: man page improvements, deployment guides, example
+    fragments for common scenarios.
+
+Report security issues privately via GitHub Security Advisories; see
+SECURITY.md at the repository root for scope and expectations.
+
+
 Build
 -----
 
@@ -328,7 +352,7 @@ Every push and pull request triggers:
   - CodeQL semantic analysis
   - ASan / UBSan sanitizer builds (sanitizer-link), plus sanitized-tests:
     the unit suite run under ASan+UBSan+LSan (.github/workflows/sanitizers.yml)
-  - libFuzzer harnesses (CIFuzz workflow, 60s budget per harness)
+  - libFuzzer harnesses (cifuzz.yml, on every push to main; fuzz-nightly runs nightly)
   - Per-function fuzz-coverage gate, >=90% region on every fuzzed
     function, replaying only the committed corpus
     (.github/workflows/fuzz-coverage.yml)

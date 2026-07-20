@@ -26,7 +26,7 @@ Near-term
     functions (tests/fuzz/fuzz_username.c covers util_is_valid_username +
     util_normalize_ip; the other seven are 1:1). OSS-Fuzz project files
     in tests/fuzz/oss-fuzz/ (project.yaml, Dockerfile, build.sh). CIFuzz action
-    in .github/workflows/cifuzz.yml runs 60s × 8 harnesses per PR; the
+    in .github/workflows/cifuzz.yml runs 60s × 8 harnesses per push to main; the
     sustained nightly cron in fuzz-nightly.yml runs 30 min × 8 harnesses
     daily. Submit PR to github.com/google/oss-fuzz once onboarding is
     approved, then switch cifuzz.yml from project-src-path to

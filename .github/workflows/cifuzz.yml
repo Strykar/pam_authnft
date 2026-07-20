@@ -1,7 +1,14 @@
 name: CIFuzz
+# Fuzzes committed code, not proposed code. PR fuzzing was an 8-minute
+# wall on every code PR and bought little over the nightly
+# (fuzz-nightly.yml runs longer with a persistent corpus and files
+# issues on crashes) and the per-PR coverage gate (fuzz-coverage.yml).
+# Instead every commit that lands on main is fuzzed post-merge, where
+# it blocks nothing.
 on:
-  pull_request:
-    branches: [master, main]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
