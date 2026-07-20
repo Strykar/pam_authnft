@@ -32,7 +32,7 @@ below.
 
 ## Background and original framing
 
-PR #51 ([commit 4f75c7e](https://github.com/identd-ng/pam_authnft/commit/4f75c7e))
+PR #51 ([commit 4f75c7e](https://github.com/Strykar/pam_authnft/commit/4f75c7e))
 closed survivors from PR #50's first util-validator mutation
 run and surfaced one mutant that resisted closure: line-55
 `cxx_ge_to_gt` (`core_len >= sizeof(core)` mutated to
@@ -71,7 +71,7 @@ mutant kill status per (status_code, stderr_content). The
 verdict was interpreted against a pre-stated mapping rather
 than against the status code's English name (a discipline
 that emerged from a prior correction documented in
-[d93e9bb](https://github.com/identd-ng/pam_authnft/commit/d93e9bb)).
+[d93e9bb](https://github.com/Strykar/pam_authnft/commit/d93e9bb)).
 
 ## The bisection under the wrong premise
 
@@ -102,8 +102,8 @@ mutation point. Filter SQLite queries by the mutation-point
 
 ### Run 4a: ASan as sole signal, H0 falsification
 
-[Run 26080445650](https://github.com/identd-ng/pam_authnft/actions/runs/26080445650),
-commit [82045a0](https://github.com/identd-ng/pam_authnft/commit/82045a0).
+[Run 26080445650](https://github.com/Strykar/pam_authnft/actions/runs/26080445650),
+commit [82045a0](https://github.com/Strykar/pam_authnft/commit/82045a0).
 
 The first run that produced an interpretable signal. Two
 coupled changes from prior runs, both serving signal
@@ -131,8 +131,8 @@ here. The bisection premise: add variables from the
 
 ### Runs 5b and 5b': verdict-mapping correctness via signal preemption
 
-5b ([run 26083179775](https://github.com/identd-ng/pam_authnft/actions/runs/26083179775),
-commit [f94f04e](https://github.com/identd-ng/pam_authnft/commit/f94f04e))
+5b ([run 26083179775](https://github.com/Strykar/pam_authnft/actions/runs/26083179775),
+commit [f94f04e](https://github.com/Strykar/pam_authnft/commit/f94f04e))
 re-added `-fsanitize=undefined` with
 `UBSAN_OPTIONS=halt_on_error=1`. UBSan's bounds check on
 `core[in_len]` fired and aborted before ASan got a turn;
@@ -142,8 +142,8 @@ suppression" or "doesn't carry") was not producible because
 UBSan's bounds-check semantics deterministically preempt
 ASan's red-zone check at this access site.
 
-5b' ([run 26083914570](https://github.com/identd-ng/pam_authnft/actions/runs/26083914570),
-commit [19881b3](https://github.com/identd-ng/pam_authnft/commit/19881b3))
+5b' ([run 26083914570](https://github.com/Strykar/pam_authnft/actions/runs/26083914570),
+commit [19881b3](https://github.com/Strykar/pam_authnft/commit/19881b3))
 resolved the preemption by flipping `UBSAN_OPTIONS` to
 `halt_on_error=0`. UBSan now logs the diagnostic and
 continues; ASan's red-zone check fires on the subsequent
@@ -158,8 +158,8 @@ follow-up resolves the preemption. Codified as Rules 3 and 4.
 
 ### Run 5a-stkprot: representative HARDENING-flag elimination
 
-[Run 26089833756](https://github.com/identd-ng/pam_authnft/actions/runs/26089833756),
-commit [26ec3b8](https://github.com/identd-ng/pam_authnft/commit/26ec3b8).
+[Run 26089833756](https://github.com/Strykar/pam_authnft/actions/runs/26089833756),
+commit [26ec3b8](https://github.com/Strykar/pam_authnft/commit/26ec3b8).
 
 Single-flag, single-variable diff from 5b'. Added
 `-fstack-protector-strong`, the HARDENING flag with the most
@@ -184,11 +184,11 @@ which are different questions.
 ### Further HARDENING-flag eliminations
 
 5a-autovarinit (`-ftrivial-auto-var-init=zero`, run
-[26093491304](https://github.com/identd-ng/pam_authnft/actions/runs/26093491304)),
+[26093491304](https://github.com/Strykar/pam_authnft/actions/runs/26093491304)),
 5a-cfprot (`-fcf-protection`, run
-[26096117471](https://github.com/identd-ng/pam_authnft/actions/runs/26096117471)),
+[26096117471](https://github.com/Strykar/pam_authnft/actions/runs/26096117471)),
 and 5a-stkclash (`-fstack-clash-protection`, run
-[26096477272](https://github.com/identd-ng/pam_authnft/actions/runs/26096477272))
+[26096477272](https://github.com/Strykar/pam_authnft/actions/runs/26096477272))
 each followed the 5a-stkprot pattern: one flag added in
 isolation, line-51 mutants returned `(1, UBSan + ASan +
 ABORTING)` with stderr_len = 4784 byte-identical to all prior
@@ -304,9 +304,9 @@ incomplete differential.
 
 ### Confirmation: run 5c
 
-[Run 26099239135](https://github.com/identd-ng/pam_authnft/actions/runs/26099239135),
-commit [865711f](https://github.com/identd-ng/pam_authnft/commit/865711f)
-(parent [3541289](https://github.com/identd-ng/pam_authnft/commit/3541289)
+[Run 26099239135](https://github.com/Strykar/pam_authnft/actions/runs/26099239135),
+commit [865711f](https://github.com/Strykar/pam_authnft/commit/865711f)
+(parent [3541289](https://github.com/Strykar/pam_authnft/commit/3541289)
 applied the Makefile fix; the child commit fixed a checkpoint-
 script grep bug that caught itself in the run-26098216078
 first attempt; see Rule 6 below).
@@ -340,7 +340,7 @@ at line 55 also killed via the same shape.
 
 The canonical rebaseline against
 `util-validator-mutation.yml` via workflow_dispatch
-([run 26099584194](https://github.com/identd-ng/pam_authnft/actions/runs/26099584194))
+([run 26099584194](https://github.com/Strykar/pam_authnft/actions/runs/26099584194))
 produced the same 35/35 result, with UBSan-only diagnostics
 (because that workflow uses `UBSAN_OPTIONS=halt_on_error=1`
 and UBSan aborts before ASan gets a turn). Same kill verdict,
@@ -561,7 +561,7 @@ line diff confirmed (specifically: each changed line traced
 to its intended effect).
 
 This caught itself in the 5c lineage. The initial 5c push
-([run 26098216078](https://github.com/identd-ng/pam_authnft/actions/runs/26098216078))
+([run 26098216078](https://github.com/Strykar/pam_authnft/actions/runs/26098216078))
 failed on the verify-fix checkpoint because the script's grep
 pipeline filtered for lines containing `src/util_validators.c`
 and then checked those filtered lines for `fsanitize=address`,
@@ -762,7 +762,7 @@ changes:
 
 Test the checkpoint locally against the actual artefact it
 inspects before pushing. The 5c lineage's checkpoint failure
-([run 26098216078](https://github.com/identd-ng/pam_authnft/actions/runs/26098216078))
+([run 26098216078](https://github.com/Strykar/pam_authnft/actions/runs/26098216078))
 caught itself precisely because the checkpoint had not been
 tested against `make -n`'s actual multi-line output before
 the push.
@@ -778,20 +778,20 @@ active branch list.
 
 | Run                | Workflow                          | Run ID                                                                                                | Commit                                                                                            | Verdict                                              |
 |---|---|---|---|---|
-| run 1 baseline     | experiment-compose-suppression    | [26054857613](https://github.com/identd-ng/pam_authnft/actions/runs/26054857613)                      | [b86821f](https://github.com/identd-ng/pam_authnft/commit/b86821f)                                | Build failure: multi-file mistake, no mutants generated |
-| run 1 fix          | experiment-compose-suppression    | [26057334931](https://github.com/identd-ng/pam_authnft/actions/runs/26057334931)                      | [d45fcd6](https://github.com/identd-ng/pam_authnft/commit/d45fcd6)                                | Stub killed by assertion (signal-isolation broken)   |
-| run 2              | experiment-compose-suppression    | [26059774039](https://github.com/identd-ng/pam_authnft/actions/runs/26059774039)                      | [7c1a90d](https://github.com/identd-ng/pam_authnft/commit/7c1a90d)                                | Stub + HARDENING, still assertion-killed             |
-| run 3              | experiment-compose-suppression    | [26077275320](https://github.com/identd-ng/pam_authnft/actions/runs/26077275320)                      | [158606c](https://github.com/identd-ng/pam_authnft/commit/158606c)                                | Production source via Makefile: line-55 survived, suppression reproduced |
-| run 4a             | experiment-compose-suppression    | [26080445650](https://github.com/identd-ng/pam_authnft/actions/runs/26080445650)                      | [82045a0](https://github.com/identd-ng/pam_authnft/commit/82045a0)                                | Bare stub, ASan-only: ASan tripped, "H0 falsified"   |
-| run 5b             | experiment-compose-suppression    | [26083179775](https://github.com/identd-ng/pam_authnft/actions/runs/26083179775)                      | [f94f04e](https://github.com/identd-ng/pam_authnft/commit/f94f04e)                                | UBSan re-added, halt_on_error=1: UBSan preempted ASan |
-| run 5b'            | experiment-compose-suppression    | [26083914570](https://github.com/identd-ng/pam_authnft/actions/runs/26083914570)                      | [19881b3](https://github.com/identd-ng/pam_authnft/commit/19881b3)                                | UBSan halt_on_error=0: both sanitisers fire cleanly  |
-| run 5a-stkprot     | experiment-compose-suppression    | [26089833756](https://github.com/identd-ng/pam_authnft/actions/runs/26089833756)                      | [26ec3b8](https://github.com/identd-ng/pam_authnft/commit/26ec3b8)                                | +stack-protector-strong: cell 4                      |
-| run 5a-autovarinit | experiment-compose-suppression    | [26093491304](https://github.com/identd-ng/pam_authnft/actions/runs/26093491304)                      | [71dd659](https://github.com/identd-ng/pam_authnft/commit/71dd659)                                | +trivial-auto-var-init=zero: cell 4                  |
-| run 5a-cfprot      | experiment-compose-suppression    | [26096117471](https://github.com/identd-ng/pam_authnft/actions/runs/26096117471)                      | [a5e5b77](https://github.com/identd-ng/pam_authnft/commit/a5e5b77)                                | +cf-protection: cell 4                               |
-| run 5a-stkclash    | experiment-compose-suppression    | [26096477272](https://github.com/identd-ng/pam_authnft/actions/runs/26096477272)                      | [5164b05](https://github.com/identd-ng/pam_authnft/commit/5164b05)                                | +stack-clash-protection: cell 4, 4×cell-4 materialised |
-| run 5c (initial)   | experiment-compose-suppression    | [26098216078](https://github.com/identd-ng/pam_authnft/actions/runs/26098216078)                      | [3541289](https://github.com/identd-ng/pam_authnft/commit/3541289)                                | Failed on verify-fix checkpoint grep bug (caught itself) |
-| run 5c (verified)  | experiment-compose-suppression    | [26099239135](https://github.com/identd-ng/pam_authnft/actions/runs/26099239135)                      | [865711f](https://github.com/identd-ng/pam_authnft/commit/865711f)                                | Makefile fix applied: 35/35 status=1, H0' confirmed  |
-| canonical rebaseline | util-validator-mutation         | [26099584194](https://github.com/identd-ng/pam_authnft/actions/runs/26099584194)                      | (workflow_dispatch against experiment branch)                                                     | Canonical production workflow: 35/35 status=1, 100% mutation score |
+| run 1 baseline     | experiment-compose-suppression    | [26054857613](https://github.com/Strykar/pam_authnft/actions/runs/26054857613)                      | [b86821f](https://github.com/Strykar/pam_authnft/commit/b86821f)                                | Build failure: multi-file mistake, no mutants generated |
+| run 1 fix          | experiment-compose-suppression    | [26057334931](https://github.com/Strykar/pam_authnft/actions/runs/26057334931)                      | [d45fcd6](https://github.com/Strykar/pam_authnft/commit/d45fcd6)                                | Stub killed by assertion (signal-isolation broken)   |
+| run 2              | experiment-compose-suppression    | [26059774039](https://github.com/Strykar/pam_authnft/actions/runs/26059774039)                      | [7c1a90d](https://github.com/Strykar/pam_authnft/commit/7c1a90d)                                | Stub + HARDENING, still assertion-killed             |
+| run 3              | experiment-compose-suppression    | [26077275320](https://github.com/Strykar/pam_authnft/actions/runs/26077275320)                      | [158606c](https://github.com/Strykar/pam_authnft/commit/158606c)                                | Production source via Makefile: line-55 survived, suppression reproduced |
+| run 4a             | experiment-compose-suppression    | [26080445650](https://github.com/Strykar/pam_authnft/actions/runs/26080445650)                      | [82045a0](https://github.com/Strykar/pam_authnft/commit/82045a0)                                | Bare stub, ASan-only: ASan tripped, "H0 falsified"   |
+| run 5b             | experiment-compose-suppression    | [26083179775](https://github.com/Strykar/pam_authnft/actions/runs/26083179775)                      | [f94f04e](https://github.com/Strykar/pam_authnft/commit/f94f04e)                                | UBSan re-added, halt_on_error=1: UBSan preempted ASan |
+| run 5b'            | experiment-compose-suppression    | [26083914570](https://github.com/Strykar/pam_authnft/actions/runs/26083914570)                      | [19881b3](https://github.com/Strykar/pam_authnft/commit/19881b3)                                | UBSan halt_on_error=0: both sanitisers fire cleanly  |
+| run 5a-stkprot     | experiment-compose-suppression    | [26089833756](https://github.com/Strykar/pam_authnft/actions/runs/26089833756)                      | [26ec3b8](https://github.com/Strykar/pam_authnft/commit/26ec3b8)                                | +stack-protector-strong: cell 4                      |
+| run 5a-autovarinit | experiment-compose-suppression    | [26093491304](https://github.com/Strykar/pam_authnft/actions/runs/26093491304)                      | [71dd659](https://github.com/Strykar/pam_authnft/commit/71dd659)                                | +trivial-auto-var-init=zero: cell 4                  |
+| run 5a-cfprot      | experiment-compose-suppression    | [26096117471](https://github.com/Strykar/pam_authnft/actions/runs/26096117471)                      | [a5e5b77](https://github.com/Strykar/pam_authnft/commit/a5e5b77)                                | +cf-protection: cell 4                               |
+| run 5a-stkclash    | experiment-compose-suppression    | [26096477272](https://github.com/Strykar/pam_authnft/actions/runs/26096477272)                      | [5164b05](https://github.com/Strykar/pam_authnft/commit/5164b05)                                | +stack-clash-protection: cell 4, 4×cell-4 materialised |
+| run 5c (initial)   | experiment-compose-suppression    | [26098216078](https://github.com/Strykar/pam_authnft/actions/runs/26098216078)                      | [3541289](https://github.com/Strykar/pam_authnft/commit/3541289)                                | Failed on verify-fix checkpoint grep bug (caught itself) |
+| run 5c (verified)  | experiment-compose-suppression    | [26099239135](https://github.com/Strykar/pam_authnft/actions/runs/26099239135)                      | [865711f](https://github.com/Strykar/pam_authnft/commit/865711f)                                | Makefile fix applied: 35/35 status=1, H0' confirmed  |
+| canonical rebaseline | util-validator-mutation         | [26099584194](https://github.com/Strykar/pam_authnft/actions/runs/26099584194)                      | (workflow_dispatch against experiment branch)                                                     | Canonical production workflow: 35/35 status=1, 100% mutation score |
 
 SQLite reports for each run are preserved in the workflow run
 artefacts under the `compose-suppression-report` (or

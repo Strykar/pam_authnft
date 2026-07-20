@@ -1,10 +1,10 @@
 # pam_authnft
 
-[![build](https://github.com/identd-ng/pam_authnft/actions/workflows/build.yml/badge.svg)](https://github.com/identd-ng/pam_authnft/actions/workflows/build.yml)
-[![CIFuzz](https://github.com/identd-ng/pam_authnft/actions/workflows/cifuzz.yml/badge.svg)](https://github.com/identd-ng/pam_authnft/actions/workflows/cifuzz.yml)
-[![cppcheck](https://github.com/identd-ng/pam_authnft/actions/workflows/cppcheck.yml/badge.svg)](https://github.com/identd-ng/pam_authnft/actions/workflows/cppcheck.yml)
-[![CodeQL](https://github.com/identd-ng/pam_authnft/actions/workflows/codeql.yml/badge.svg)](https://github.com/identd-ng/pam_authnft/actions/workflows/codeql.yml)
-[![sanitizers](https://github.com/identd-ng/pam_authnft/actions/workflows/sanitizers.yml/badge.svg)](https://github.com/identd-ng/pam_authnft/actions/workflows/sanitizers.yml)
+[![build](https://github.com/Strykar/pam_authnft/actions/workflows/build.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/build.yml)
+[![CIFuzz](https://github.com/Strykar/pam_authnft/actions/workflows/cifuzz.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/cifuzz.yml)
+[![cppcheck](https://github.com/Strykar/pam_authnft/actions/workflows/cppcheck.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/cppcheck.yml)
+[![CodeQL](https://github.com/Strykar/pam_authnft/actions/workflows/codeql.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/codeql.yml)
+[![sanitizers](https://github.com/Strykar/pam_authnft/actions/workflows/sanitizers.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/sanitizers.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12496/badge?v=passing)](https://www.bestpractices.dev/projects/12496)
 [![Coverity Scan](https://scan.coverity.com/projects/pam_authnft/badge.svg)](https://scan.coverity.com/projects/pam_authnft)
 [![Language: C](https://img.shields.io/badge/language-C-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
@@ -737,7 +737,7 @@ gates a PR must clear, and the seccomp allowlist derivation
 procedure.
 
 Report security issues privately via [GitHub Security
-Advisories](https://github.com/identd-ng/pam_authnft/security/advisories)
+Advisories](https://github.com/Strykar/pam_authnft/security/advisories)
 (see [SECURITY.md](SECURITY.md) for scope and expectations).
 
 ## Project documentation

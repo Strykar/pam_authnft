@@ -1,13 +1,13 @@
 # RFC 9116 security.txt for pam_authnft.
 #
 # The canonical reporting channel is GitHub Security Advisories on
-# the identd-ng/pam_authnft repository ("Report a vulnerability" tab
+# the Strykar/pam_authnft repository ("Report a vulnerability" tab
 # under Security). The full reporting policy lives in SECURITY.md.
 
-Contact: https://github.com/identd-ng/pam_authnft/security/advisories/new
+Contact: https://github.com/Strykar/pam_authnft/security/advisories/new
 Contact: avinashhd@protonmail.com
 Expires: 2027-04-26T00:00:00.000Z
 Preferred-Languages: en
-Canonical: https://raw.githubusercontent.com/identd-ng/pam_authnft/main/.well-known/security.txt
-Policy: https://github.com/identd-ng/pam_authnft/blob/main/SECURITY.md
-Acknowledgments: https://github.com/identd-ng/pam_authnft/security/advisories
+Canonical: https://raw.githubusercontent.com/Strykar/pam_authnft/main/.well-known/security.txt
+Policy: https://github.com/Strykar/pam_authnft/blob/main/SECURITY.md
+Acknowledgments: https://github.com/Strykar/pam_authnft/security/advisories

@@ -286,7 +286,7 @@ unsupported. On PAM stacks where the process invoking
 **pam_sm_open_session** is not the direct parent of the user session,
 the resolved cgroup may differ from the session's eventual cgroup.
 
-Report issues via GitHub Security Advisories on *identd-ng/pam_authnft*
+Report issues via GitHub Security Advisories on *Strykar/pam_authnft*
 for security-sensitive reports, or the public issue tracker otherwise.
 
 # SEE ALSO
