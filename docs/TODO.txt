@@ -40,7 +40,7 @@ Near-term
 Medium-term
 -----------
 [ ] Per-session resource controls documented with concrete examples —
-    README.md now has a "systemd controls" section with
+    docs/ADMIN_GUIDE.md has a "systemd controls" section with
     IPAddressDeny / SystemCallFilter / CapabilityBoundingSet examples;
     could be expanded into a dedicated deployment recipe under a new
     docs/RECIPES.txt.

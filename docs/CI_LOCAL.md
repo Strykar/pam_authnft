@@ -164,7 +164,7 @@ Makefile                   audit / audit-container / test-packet-match / install
   pamtester/PAM/sshd — which is run by hand on a real host via
   `sudo make test-packet-match`. That is the check that tells an admin whether
   their kernel actually matches `socket cgroupv2` on INPUT (commit
-  05ae2fba821c; see the requirements table in README.md), which no version
+  05ae2fba821c; see the requirements table in ADMIN_GUIDE.md), which no version
   check can answer.
 - The container image ships no sshd, so 10.25 runs only its pamtester
   control arm there and skips the sshd loopback arm; the full stage needs
