@@ -7,3 +7,9 @@ updates:
     labels:
       - dependencies
       - github-actions
+    groups:
+      # init/analyze/upload-sarif must move in lockstep: analyze refuses to
+      # run against a config file written by a different action version.
+      codeql-action:
+        patterns:
+          - github/codeql-action*
