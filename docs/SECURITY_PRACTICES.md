@@ -38,6 +38,7 @@ column lists the bug class or signal each tool produces.
 | **Dependabot** | `.github/dependabot.yml` | weekly | GitHub Actions version bumps (github-actions ecosystem only; the C-library inventory is manual, see below) |
 | **Third-party drift gate** | `.github/workflows/third-party.yml` → `tests/ci/thirdparty-check.sh` | every PR | asserts every `DT_NEEDED` library the .so links is inventoried in `docs/THIRD_PARTY.md`, so a new dependency cannot land without an entry (versions/CVE feeds stay manual) |
 | **SBOM** | `.github/workflows/sbom.yml` → `make sbom` (syft) | every release + dispatch | generates a CycloneDX SBOM of the shipped .so and attaches it to the release |
+| **SLSA provenance** | `.github/workflows/release-provenance.yml` | every release + dispatch | attaches the canonical source tarball and a Build L3 signed in-toto attestation (slsa-github-generator on Sigstore); verify with `slsa-verifier` |
 | **fuzz-coverage measurement** | `make fuzz-coverage` → `docs/fuzz-coverage/` | manual / per-PR | per-function fuzz region/line/branch coverage; gates the ≥90% bar in `docs/FUZZ_SURFACE.md` |
 | **Reproducibility check** | `.github/workflows/reproducibility.yml` → `make reproducibility-check` | every PR | builds pam_authnft.so twice from a clean tree and fails on a sha256 mismatch (bit-identical same-machine builds) |
 | **Trace-based seccomp provenance** | `make trace`, `make trace-features` | manual | confirms the seccomp allowlist matches actually-used syscalls |

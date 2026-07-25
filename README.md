@@ -6,6 +6,8 @@
 [![CodeQL](https://github.com/Strykar/pam_authnft/actions/workflows/codeql.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/codeql.yml)
 [![sanitizers](https://github.com/Strykar/pam_authnft/actions/workflows/sanitizers.yml/badge.svg)](https://github.com/Strykar/pam_authnft/actions/workflows/sanitizers.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12496/badge?v=passing)](https://www.bestpractices.dev/projects/12496)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Strykar/pam_authnft/badge)](https://scorecard.dev/viewer/?uri=github.com/Strykar/pam_authnft)
+[![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
 [![Coverity Scan](https://scan.coverity.com/projects/pam_authnft/badge.svg)](https://scan.coverity.com/projects/pam_authnft)
 [![Language: C](https://img.shields.io/badge/language-C-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
