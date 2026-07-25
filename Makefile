@@ -5,11 +5,18 @@
 
 CC         = gcc
 PKG_CONFIG = pkg-config
-PAM_DIR    = /usr/lib/security
-MAN_DIR    = /usr/share/man/man8
+# Staged installs for packagers: DESTDIR prefixes every destination and,
+# when set, nothing on the live system is touched (no daemon-reload, no
+# tmpfiles --create). Defaults keep `sudo make install` byte-identical
+# to what the docs describe.
+DESTDIR   ?=
+PREFIX    ?= /usr
+PAM_DIR   ?= $(PREFIX)/lib/security
+MAN_DIR   ?= $(PREFIX)/share/man/man8
+UNIT_DIR  ?= /etc/systemd/system
 PANDOC     = pandoc
 TEST_USER  ?= authnft-test
-TMPFILES_DIR = /usr/lib/tmpfiles.d
+TMPFILES_DIR ?= $(PREFIX)/lib/tmpfiles.d
 CFLAGS     =
 
 LIBS      = libnftables libseccomp libsystemd pam libcap audit
@@ -467,23 +474,25 @@ $(TEST_UTIL_VALIDATOR).mull: $(OBJ_DIR)/test_util_validators.mull.o $(OBJ_DIR)/u
 	$(MULL_CLANG) $(MULL_EXTRA_CFLAGS) $^ -o $@
 
 install: $(TARGET) install-tmpfiles
-	sudo mkdir -p /etc/authnft/users
-	sudo install -m 755 $(TARGET) $(PAM_DIR)/$(TARGET)
-	sudo install -m 644 data/authnft.slice /etc/systemd/system/authnft.slice
-	sudo systemctl daemon-reload
+	install -d $(DESTDIR)/etc/authnft/users
+	install -d $(DESTDIR)$(PAM_DIR)
+	install -m 755 $(TARGET) $(DESTDIR)$(PAM_DIR)/$(TARGET)
+	install -d $(DESTDIR)$(UNIT_DIR)
+	install -m 644 data/authnft.slice $(DESTDIR)$(UNIT_DIR)/authnft.slice
+	[ -n "$(DESTDIR)" ] || systemctl daemon-reload
 
 # tmpfiles.d snippet creates /run/authnft/sessions/ at boot and reaps
 # stale per-session JSON files older than 7 days. See data/authnft.tmpfiles
 # and docs/INTEGRATIONS.txt §5.6.
 install-tmpfiles:
-	sudo install -d $(TMPFILES_DIR)
-	sudo install -m 644 data/authnft.tmpfiles $(TMPFILES_DIR)/authnft.conf
-	sudo systemd-tmpfiles --create $(TMPFILES_DIR)/authnft.conf
+	install -d $(DESTDIR)$(TMPFILES_DIR)
+	install -m 644 data/authnft.tmpfiles $(DESTDIR)$(TMPFILES_DIR)/authnft.conf
+	[ -n "$(DESTDIR)" ] || systemd-tmpfiles --create $(TMPFILES_DIR)/authnft.conf
 
 uninstall:
-	sudo rm -f $(PAM_DIR)/$(TARGET)
-	sudo rm -f $(MAN_DIR)/pam_authnft.8.gz
-	sudo rm -f $(TMPFILES_DIR)/authnft.conf
+	rm -f $(DESTDIR)$(PAM_DIR)/$(TARGET)
+	rm -f $(DESTDIR)$(MAN_DIR)/pam_authnft.8.gz
+	rm -f $(DESTDIR)$(TMPFILES_DIR)/authnft.conf
 
 # Manpage — requires pandoc. Builds pam_authnft.8 from man/pam_authnft.8.md.
 man: man/pam_authnft.8
@@ -492,9 +501,9 @@ man/pam_authnft.8: man/pam_authnft.8.md
 	$(PANDOC) -s -t man $< -o $@
 
 install-man: man/pam_authnft.8
-	sudo install -d $(MAN_DIR)
-	sudo install -m 644 man/pam_authnft.8 $(MAN_DIR)/pam_authnft.8
-	sudo gzip -f $(MAN_DIR)/pam_authnft.8
+	install -d $(DESTDIR)$(MAN_DIR)
+	install -m 644 man/pam_authnft.8 $(DESTDIR)$(MAN_DIR)/pam_authnft.8
+	gzip -f $(DESTDIR)$(MAN_DIR)/pam_authnft.8
 
 # Fuzz targets — requires clang + compiler-rt (libFuzzer).
 # Builds harnesses with ASan + libFuzzer into tests/fuzz/out/. Run a target
