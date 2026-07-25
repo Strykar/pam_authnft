@@ -29,6 +29,47 @@ case "$WORKFLOW" in
         make clean && make && ./tests/trace.sh "$(pwd)/pam_authnft.so" || EC=$?
         cp -f trace.log trace-claims.log /shared/ 2>/dev/null || true
         ;;
+    coverage)
+        # Unit + integration tiers against one gcov-instrumented build,
+        # so counters accumulate across both. Each gcov context (obj/
+        # for the .so and main suite, one per standalone test binary)
+        # is dumped to its own /shared/gcov/N dir; the host unions them
+        # with tests/ci/coverage-union.py. Known structural loss: the
+        # seccomp'd setup child _exit()s, which skips gcov flush, so
+        # nft_handler's in-child increments never land; the fault
+        # driver covers that file in-process instead.
+        # The fault matrix (run-audit.sh) drives nft_handler's setup and
+        # error paths in-process, where gcov can flush; the pamtester
+        # path loses them to the setup child's _exit. Prebuilding the
+        # driver and preloads instrumented means run-audit's own make
+        # calls see fresh targets and skip the uninstrumented rebuild.
+        # run-all.sh is NOT used here: its make clean would wipe the
+        # gcda accumulated by the earlier suites.
+        make clean && make CC="gcc --coverage" CFLAGS="-DAUTHNFT_COVERAGE" \
+          && make test CC="gcc --coverage" CFLAGS="-DAUTHNFT_COVERAGE" \
+          && ./tests/integration_test.sh "$(pwd)/pam_authnft.so" \
+          && make tests/audit/nft_fault_driver tests/audit/malloc_fail.so \
+                  tests/audit/nft_fail.so CC="gcc --coverage" \
+          && ./tests/audit/run-audit.sh \
+          && AUTHNFT_AUDIT_MODE=1 ./authnft_test \
+          || EC=$?
+        # Feature-path catalogue run (sock_diag, keyctl): same binary,
+        # different stage selection; coverage only, failures tolerated.
+        ./tests/trace_features.sh >/dev/null 2>&1 || true
+        # gcov resolves the relative Source: paths against its cwd, so
+        # it must run from /build where src/ exists; each context's
+        # output is then moved aside before the next run overwrites it.
+        n=0
+        rm -f /build/*.gcov
+        gcov -o /build/obj /build/src/*.c >/dev/null 2>&1 || true
+        mkdir -p "/shared/gcov/$n" && mv -f /build/*.gcov "/shared/gcov/$n/" 2>/dev/null || true
+        for g in /build/*-*.gcda /build/tests/audit/*-*.gcda /build/tests/oracle/*-*.gcda; do
+            [ -e "$g" ] || continue
+            n=$((n + 1))
+            gcov "$g" >/dev/null 2>&1 || true
+            mkdir -p "/shared/gcov/$n" && mv -f /build/*.gcov "/shared/gcov/$n/" 2>/dev/null || true
+        done
+        ;;
     audit)
         # Local audit: unit suite (seccomp enforcement) + fault matrix
         # (nft_handler_setup error returns under ASan/LSan + lifecycle

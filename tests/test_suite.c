@@ -4,6 +4,7 @@
 #include "authnft.h"
 #include "util_validators.h"
 #include <arpa/inet.h>
+#include <security/pam_appl.h>
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
@@ -318,6 +319,58 @@ static void run_keyring_test(void) {
     printf("[PASS] tag='%s'\n", tag);
 }
 
+/* Stage 10b: keyring_fetch_tag guard ladder. The claims_env value is
+ * attacker-influenced (an upstream module could be misconfigured or
+ * hostile), so every malformed serial must yield "no claim" (rc 0,
+ * empty tag) rather than a bogus keyctl read. Class of regression:
+ * strtol guard loosened, range check dropped, or a keyctl failure
+ * mistaken for a claim. Uses a real pam handle so pam_getenv and the
+ * warning-path pam_syslog run for real; no PAM config is needed at
+ * pam_start time. */
+static void run_keyring_fetch_tag_test(void) {
+    printf("[STAGE 10b] keyring_fetch_tag guard ladder...\n");
+    static const struct pam_conv conv = { NULL, NULL };
+    pam_handle_t *pamh = NULL;
+    if (pam_start("authnft_test", "root", &conv, &pamh) != PAM_SUCCESS || !pamh) {
+        printf("[SKIP] pam_start failed\n");
+        return;
+    }
+    char tag[CLAIMS_TAG_MAX];
+    static const char *bad[] = {
+        "AUTHNFT_TEST_CLAIM=not-a-number",   /* no digits */
+        "AUTHNFT_TEST_CLAIM=123abc",         /* trailing junk */
+        "AUTHNFT_TEST_CLAIM=99999999999",    /* > INT32_MAX */
+        "AUTHNFT_TEST_CLAIM=-99999999999",   /* < INT32_MIN */
+        "AUTHNFT_TEST_CLAIM=2147483646",     /* well-formed, no such key */
+    };
+    tag[0] = 'X';
+    if (keyring_fetch_tag(pamh, "AUTHNFT_TEST_UNSET", tag, sizeof(tag)) != 0 ||
+        tag[0] != '\0') {
+        fprintf(stderr, "[FAIL] unset env var did not yield empty no-claim\n");
+        exit(1);
+    }
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        if (pam_putenv(pamh, bad[i]) != PAM_SUCCESS) {
+            fprintf(stderr, "[FAIL] pam_putenv('%s')\n", bad[i]);
+            exit(1);
+        }
+        tag[0] = 'X';
+        if (keyring_fetch_tag(pamh, "AUTHNFT_TEST_CLAIM", tag, sizeof(tag)) != 0 ||
+            tag[0] != '\0') {
+            fprintf(stderr, "[FAIL] '%s' was not rejected as no-claim\n", bad[i]);
+            exit(1);
+        }
+    }
+    if (keyring_fetch_tag(NULL, "X", tag, sizeof(tag)) != 0 ||
+        keyring_fetch_tag(pamh, NULL, tag, sizeof(tag)) != 0 ||
+        keyring_fetch_tag(pamh, "X", tag, 0) != 0) {
+        fprintf(stderr, "[FAIL] NULL/zero-size args not rejected\n");
+        exit(1);
+    }
+    pam_end(pamh, PAM_SUCCESS);
+    printf("[PASS] all malformed serials yield no-claim\n");
+}
+
 /* Stage 11: collect_socket_inodes caps the /proc/<pid>/fd socket scan at
  * INODES_CAP and flags truncation. A process holding more socket inodes
  * than the cap must yield exactly the cap and truncated=1; otherwise a peer
@@ -464,6 +517,7 @@ int main(void) {
     run_rhost_normalization_test();
     run_peer_lookup_test();
     run_keyring_test();
+    run_keyring_fetch_tag_test();
     run_inodes_cap_test();
     run_session_file_perms_test();
     run_sandbox_syscall_surface_test();

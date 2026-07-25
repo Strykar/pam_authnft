@@ -240,6 +240,19 @@ test-integration-container:
 	@mkdir -p $(RESULT_DIR) && echo integration > $(RESULT_DIR)/workflow
 	$(RUN_CONTAINER)
 
+# Statement coverage across the unit AND integration tiers, unioned.
+# Runs both suites in the container against one gcov-instrumented
+# build; per-context .gcov dumps land in $(RESULT_DIR)/gcov and
+# tests/ci/coverage-union.py unions them (a line is covered if any
+# context executed it). This is the number behind the best-practices
+# test_statement_coverage80 criterion.
+coverage-report: RESULT_DIR = $(CURDIR)/.container-result
+coverage-report:
+	$(CONTAINER_BUILD)
+	@mkdir -p $(RESULT_DIR) && rm -rf $(RESULT_DIR)/gcov && echo coverage > $(RESULT_DIR)/workflow
+	$(RUN_CONTAINER)
+	python3 tests/ci/coverage-union.py $(RESULT_DIR)/gcov
+
 # Seccomp allowlist trace inside the container. Produces
 # trace.log and trace-claims.log, which are copied out to
 # $(RESULT_DIR). Replaces `sudo make trace` as the default path.
