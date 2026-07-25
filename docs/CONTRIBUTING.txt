@@ -32,6 +32,17 @@ Report security issues privately via GitHub Security Advisories; see
 SECURITY.md at the repository root for scope and expectations.
 
 
+Developer Certificate of Origin
+-------------------------------
+
+Contributions are accepted under GPL-2.0-or-later with a Developer
+Certificate of Origin sign-off (https://developercertificate.org/).
+Add `Signed-off-by: Your Name <you@example.com>` to each commit
+(`git commit -s`), certifying you have the right to submit the work
+under the project licence. Project governance, including the named
+successor arrangement, is documented in GOVERNANCE.md.
+
+
 Build
 -----
 
@@ -248,9 +259,11 @@ Tests
   state mid-run or when no container runtime is available.
 - Run `sudo make distclean` to tear down a leftover `inet authnft`
   table and the throwaway `/etc/pam.d/authnft_test` config.
-- New behaviour does not require new tests — add one only if the
-  behaviour is representative of a class of regression you would
-  actually want caught.
+- Test policy: major new functionality MUST come with tests that
+  exercise it; a PR adding a user-visible feature or a new code path
+  is not merged without them. For small changes, add a test only if
+  the behaviour is representative of a class of regression you would
+  actually want caught — coverage theatre is not a goal.
 
 The integration test creates and cleans up its own test user and
 group automatically. Set `AUTHNFT_TEST_USER` to override the test
