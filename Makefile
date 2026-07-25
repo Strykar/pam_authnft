@@ -347,6 +347,10 @@ sbom: $(SBOM)
 $(SBOM): $(TARGET)
 	@command -v syft >/dev/null || { echo "syft required: https://github.com/anchore/syft"; exit 1; }
 	syft scan file:$(TARGET) -o cyclonedx-json=$(SBOM)
+	@# syft on a bare ELF records the file and zero components; the
+	@# linked libraries live in DT_NEEDED, so merge them in with their
+	@# owning distro package versions.
+	python3 tests/ci/sbom-enrich.py $(SBOM) $(TARGET)
 	@echo "SBOM written to $(SBOM)"
 	@echo "(human-readable dependency inventory: docs/THIRD_PARTY.md)"
 
