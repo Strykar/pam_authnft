@@ -16,6 +16,17 @@
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
 
+#ifdef AUTHNFT_COVERAGE
+/* Coverage builds only (make coverage-report): the setup child exits
+ * with _exit, which skips the atexit hook gcov flushes from, so its
+ * counters (sandbox_apply, the whole setup path) would be lost. Never
+ * defined in production builds. */
+extern void __gcov_dump(void);
+#define AUTHNFT_GCOV_DUMP() __gcov_dump()
+#else
+#define AUTHNFT_GCOV_DUMP() do { } while (0)
+#endif
+
 static void free_pam_data(pam_handle_t *pamh, void *data, int error_status) {
     (void)pamh; (void)error_status;
     free(data);
@@ -154,6 +165,7 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
             off += (size_t)w;
         }
         close(pfd[1]);
+        AUTHNFT_GCOV_DUMP();
         _exit(0);
     }
 

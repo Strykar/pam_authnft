@@ -117,6 +117,12 @@ tests/ Makefile` runs the tier-1
 audit and is blocked on failure. Doc-only commits skip it, so writing docs
 stays instant.
 
+`make coverage-report` runs the unit suite, the 25-stage integration
+suite and the fault matrix in the container against one
+gcov-instrumented build and unions the contexts with
+`tests/ci/coverage-union.py` (a line counts as covered if any tier
+executed it). Current total: 81 percent statements across src/.
+
 ## Files
 
 ```
