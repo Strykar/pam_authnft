@@ -45,6 +45,10 @@ Installs the module to `/usr/lib/security/pam_authnft.so`, `authnft.slice`
 to `/etc/systemd/system/`, and the tmpfiles.d snippet that creates
 `/run/authnft/sessions/` at boot to `/usr/lib/tmpfiles.d/authnft.conf`.
 
+Packagers: `make install DESTDIR="$pkgdir"` stages the full tree without
+touching the live system (no daemon-reload, no tmpfiles --create), and
+`PREFIX`, `PAM_DIR`, `UNIT_DIR` and `TMPFILES_DIR` are overridable.
+
 ### Minimal working configuration
 
 ```bash
