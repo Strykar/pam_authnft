@@ -1,0 +1,89 @@
+name: release-provenance
+
+# SLSA Build L3 provenance for release artefacts. The build job produces
+# the canonical source tarball and attaches it to the release; the
+# provenance job hands its hashes to the slsa-github-generator reusable
+# workflow, which builds a signed in-toto attestation on Sigstore
+# infrastructure and attaches it alongside. Verify with:
+#   slsa-verifier verify-artifact pam_authnft-<ver>.tar.gz \
+#     --provenance-path multiple.intoto.jsonl \
+#     --source-uri github.com/Strykar/pam_authnft
+#
+# workflow_dispatch takes an existing release tag so provenance can be
+# produced for a release published before this workflow existed.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build provenance for'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # attach the tarball to the release
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve and validate the tag
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then tag="$INPUT_TAG"; else tag="$RELEASE_TAG"; fi
+          case "$tag" in
+              v[0-9]*) printf '%s\n' "$tag" | grep -qE '^v[0-9][0-9A-Za-z.-]*$' || exit 1 ;;
+              *) echo "unexpected tag: $tag" >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the tagged tree
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Build the source tarball
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          ver="${TAG#v}"
+          git archive --format=tar.gz --prefix="pam_authnft-${ver}/" \
+              -o "pam_authnft-${ver}.tar.gz" "$TAG"
+
+      - name: Attach the tarball to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh release upload "$TAG" pam_authnft-*.tar.gz --clobber
+
+      - name: Compute subject hashes
+        id: hash
+        run: echo "hashes=$(sha256sum pam_authnft-*.tar.gz | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: build
+    permissions:
+      actions: read     # read the build workflow for the attestation
+      id-token: write   # Sigstore signing
+      contents: write   # attach the provenance to the release
+    # Referenced by tag, not commit hash: the slsa-verifier trusts the
+    # generator only when called at a released tag, so hash-pinning
+    # would break verification. This is the documented exception to the
+    # pin-everything rule.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.build.outputs.hashes }}
+      upload-assets: true
+      upload-tag-name: ${{ needs.build.outputs.tag }}
