@@ -24,9 +24,10 @@ login's PID recycles onto the leaked names, which trips the self-heal at
 
 OpenBSD's authpf has had this for years: named anchors loaded per
 session via pfctl and torn down when the session ends. authnft brings
-the same model to Linux, as a PAM module. Named nftables sets stand in
-for the anchors, and the cgroupv2 inode of a systemd transient scope
-replaces the authenticated shell as the session identity.
+the same model to Linux, as a PAM module. Under 2,000 lines of C,
+auditable in a day or two. Named nftables sets stand in for the
+anchors, and the cgroupv2 inode of a systemd transient scope replaces
+the authenticated shell as the session identity.
 
 No dedicated shell, no setuid binary, no kernel patches.
 
