@@ -300,8 +300,23 @@ Trust model
   Class B traffic survives because pam_authnft adds
   `ct state established,related accept` to the shared `filter`
   chain ahead of any jump rules. This short-circuits before
-  the cgroup match. Integration test 10.12 validates this
-  invariant empirically.
+  the cgroup match. Integration test 10.12 validates the
+  match half of this, that a pre-scope socket does not match
+  the cgroup set. The survival half is validated by cases C1
+  and C2 of `make test-packet-flow`, which carry a real
+  pre-session flow across the session open and then delete
+  the ct rule to confirm it is the thing holding the flow up.
+
+  Survival has a precondition: conntrack must already have
+  been tracking the flow when it opened. If the module's ct
+  rule is the first rule on the host to reference conntrack,
+  then conntrack was not watching when the SSH connection
+  was made, and adding the rule afterwards does not rescue
+  it. The entry conntrack builds mid-stream does not satisfy
+  `ct state established` for that flow's inbound data
+  packets, so a site deny takes them (case C3). Hosts whose
+  ruleset is already stateful, which is the normal case, are
+  unaffected.
 
 
 Seccomp

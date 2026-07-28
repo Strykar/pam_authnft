@@ -103,6 +103,22 @@ The fix is Fixes-tagged, so stable branches carry it (5.15.y does, hence Ubuntu
 version check distinguishes these; this target drives the real match and exits
 non-zero if the kernel accepts the rule but never matches on it.
 
+Packet-flow matrix (allow and deny, on the wire):
+
+```sh
+sudo make test-packet-flow
+```
+
+`test-packet-match` proves that rules match. This proves what the wire does
+with them: 23 cases covering session admission, cross-session isolation, the
+ct rule that carries the SSH connection, what close_session revokes and what
+it does not, and the three placements an admin can pick for the site's
+default-deny. Each case declares its expected verdict and fails if a real TCP
+payload disagrees. It runs in a throwaway netns, so the deny rules it needs
+cannot touch the host's connectivity. Set `AUTHNFT_TRACE_DIR` to keep the
+`nft monitor trace` captures. Findings and the boundary map are in
+[research/packet-flow-audit.md](../research/packet-flow-audit.md).
+
 commit-time gate (after `make install-hooks`):
 
 ```sh

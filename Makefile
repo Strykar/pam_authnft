@@ -189,6 +189,15 @@ test-integration: $(TEST_BIN)
 test-packet-match:
 	sudo ./tests/packet_match_headless.sh
 
+# Does a packet get through, or not? test-packet-match proves rules MATCH;
+# this proves what the wire does with them, allow and deny both, across
+# session open, session close and the placements an admin can pick for the
+# site's default-deny. It runs in a throwaway netns, so the deny rules it
+# needs cannot touch the host. Set AUTHNFT_TRACE_DIR to keep the
+# `nft monitor trace` captures.
+test-packet-flow:
+	sudo ./tests/packet_flow_matrix.sh
+
 # Containerised workflows. Every test surface the project ships runs
 # inside a booted-systemd container on any host with podman or docker
 # — no sudo required, no host state mutation.
@@ -686,7 +695,7 @@ distclean: clean
 	fi
 	@sudo rm -f /etc/pam.d/authnft_test /etc/authnft/users/$(TEST_USER)
 
-.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-container \
+.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-packet-flow test-container \
         test-integration-container test-musl trace trace-container trace-features \
         audit audit-container docs-drift \
         distclean install install-tmpfiles uninstall man install-man

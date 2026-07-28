@@ -165,6 +165,17 @@ close_session — which takes the element with it — or deleting her
 per-session chain, instantly stops her rules from firing; bob's chain and
 set are untouched.
 
+What that stops is admission. No new connection is admitted once her
+rules are gone, but a connection already established keeps passing:
+conntrack still holds it, and the shared `ct state established,related
+accept` rule still matches it. close_session does not touch conntrack.
+The bound is therefore "no new access after logout", not "no access
+after logout", so a long transfer or a reverse tunnel opened during the
+session outlives the logout and ends on its own. Revoking those flows
+needs a conntrack flush, which is what authpf does at logout and what
+issue #103 tracks. Cases D1 to D3 of `make test-packet-flow` pin the
+behaviour as it stands.
+
 On session open:
 
 1. Normalises `PAM_RHOST`: IPv4/IPv6 literals pass through, zone suffixes

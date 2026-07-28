@@ -20,7 +20,15 @@ On a supported kernel, configured as documented, pam_authnft upholds:
   identity file and claims tag cannot be read or altered by another
   non-root subject.
 - **C3. Bounded persistence.** Session state cannot outlive its
-  session without bound, even when teardown never runs.
+  session without bound, even when teardown never runs. This is a claim
+  about nftables state, not about traffic. The module gates connection
+  establishment: teardown removes the admission path, so no new
+  connection is admitted after close, but a connection already
+  established keeps running until it ends on its own. Conntrack holds
+  that flow's state and the module never touches conntrack. Pinned by
+  cases D1 to D3 of `make test-packet-flow`; see
+  [research/packet-flow-audit.md](../research/packet-flow-audit.md) and
+  issue #103.
 - **C4. Fail closed on open.** Malformed, missing or hostile input at
   session open denies the session before any nftables state exists;
   teardown at close is deliberately best-effort so a session can
