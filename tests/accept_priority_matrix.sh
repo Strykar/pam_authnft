@@ -17,20 +17,19 @@
 # saddr`; rule ordering and chain traversal are independent of the key.
 #
 # Run as root. Everything happens in a throwaway netns.
-set -u
+set -euo pipefail
 
 NS=authnft-prio
-PORT=19099
 
 [[ $(id -u) -eq 0 ]] || { echo "needs root"; exit 1; }
 
-ip netns del $NS 2>/dev/null
+ip netns del $NS 2>/dev/null || true
 ip netns add $NS || exit 1
-trap 'ip netns pids '$NS' 2>/dev/null | xargs -r kill 2>/dev/null; ip netns del '$NS' 2>/dev/null' EXIT
+trap 'ip netns pids '$NS' 2>/dev/null | xargs -r kill 2>/dev/null || true; ip netns del '$NS' 2>/dev/null || true' EXIT
 ip -n $NS link set lo up
 
 ip netns exec $NS bash -s <<'EOF'
-set -u
+set -euo pipefail
 PORT=19099
 r() { echo "    $*"; }
 
@@ -45,7 +44,7 @@ done
 # shared chain at priority filter - 1 with policy accept, ct rule first,
 # per-session chain reached by an appended jump.
 module_state() {
-    nft delete table inet authnft 2>/dev/null
+    nft delete table inet authnft 2>/dev/null || true
     nft -f - <<'RULES'
 add table inet authnft
 add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
@@ -92,5 +91,5 @@ else        r "BLOCKED      (session-accept=$(sess_pkts))  <-- module accepted, 
 echo
 echo "### final ruleset"
 nft list table inet authnft | sed 's/^/    /'
-kill $SRV 2>/dev/null
+kill $SRV 2>/dev/null || true
 EOF
