@@ -179,6 +179,11 @@ RULES
 
 ct_rule() { nft add rule inet authnft filter ct state established,related counter accept comment '"ct-accept"' || die "ct rule"; }
 jump_rule() { nft add rule inet authnft filter jump "session_$1" || die "jump rule for $1"; }
+# The same jump, prepended. `add` appends, which is what puts a later
+# session behind an already-placed site deny (E4). `insert` puts every
+# jump at the head of the chain, so the deny stays last however many
+# sessions open after it.
+jump_rule_insert() { nft insert rule inet authnft filter jump "session_$1" || die "jump insert for $1"; }
 site_deny() { nft add rule inet authnft filter tcp dport "$1" counter drop comment "\"deny-$1\"" || die "site deny for $1"; }
 table_down() { nft delete table inet authnft 2>/dev/null; return 0; }
 
@@ -338,6 +343,48 @@ nft add chain inet authnft sitedeny '{ type filter hook input priority filter; p
 nft add rule inet authnft sitedeny ct state established,related counter accept
 check E3 BLOCK "$(verdict $OK_SRC $SVC)" "site deny as a separate base chain at priority filter"
 printf "       shadow control: sess-a=%s (>0 proves the module accepted and was overruled)\n" "$(cnt sess-a)"
+
+# E1 is only true until the next login. The module APPENDS its jump rule, so
+# a session opened after the site deny lands behind it and is never reached.
+# That makes "append the deny after the jumps" unworkable as advice: it is
+# correct for the sessions that already exist and silently wrong for every
+# one that follows, including after a reboot when the deny is restored from
+# the site ruleset before anyone logs in.
+#
+# The insidious part is that this is not a clean failure. alice, whose jump
+# predates the deny, keeps working. bob does not. Same module, same fragment
+# shape, same host, opposite outcomes decided by login order.
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule a; site_deny 19102
+nft -f - <<RULES || die "bob's session state for E4"
+add chain inet authnft session_b
+add set inet authnft session_b_v4 { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }
+add element inet authnft session_b_v4 { "$CG_B" . $OK_SRC timeout 1d }
+add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4 tcp dport 19102 counter accept comment "sess-b"
+RULES
+jump_rule b     # appended, so it lands AFTER the deny
+check E4 BLOCK "$(verdict $OK_SRC 19102)" "session opened after the site deny: its jump is shadowed"
+printf "       shadow control: sess-b=%s (0 proves bob's jump was never reached)\n" "$(cnt sess-b)"
+# The control that makes E4 mean something: alice, whose jump predates the
+# deny, is unaffected. Without this the run cannot tell "bob is shadowed"
+# from "the whole table is broken".
+check E5 PASS "$(verdict $OK_SRC $SVC)" "the session that predates the deny still works (E4 control)"
+
+# E4 with one verb changed. Everything else is identical: same order of
+# operations, same deny already in place, same fragment. `insert` puts
+# bob's jump ahead of the deny instead of behind it.
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule_insert a; site_deny 19102
+nft -f - <<RULES || die "bob's session state for E6"
+add chain inet authnft session_b
+add set inet authnft session_b_v4 { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }
+add element inet authnft session_b_v4 { "$CG_B" . $OK_SRC timeout 1d }
+add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4 tcp dport 19102 counter accept comment "sess-b"
+RULES
+jump_rule_insert b
+check E6 PASS "$(verdict $OK_SRC 19102)" "same session, jump INSERTED rather than appended (#105 fix)"
+printf "       sess-b=%s (>0 proves bob's jump was reached this time)\n" "$(cnt sess-b)"
+# And the deny still denies: a source in nobody's set must not ride in on
+# the reordering. Without this E6 could pass by breaking enforcement.
+check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with jumps inserted (E6 control)"
 
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
