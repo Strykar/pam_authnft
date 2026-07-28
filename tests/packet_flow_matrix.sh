@@ -386,6 +386,16 @@ printf "       sess-b=%s (>0 proves bob's jump was reached this time)\n" "$(cnt 
 # the reordering. Without this E6 could pass by breaking enforcement.
 check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with jumps inserted (E6 control)"
 
+# E2 with the jump inserted. E2 is the admin who puts the deny in the shared
+# chain before any session has ever opened, which is the normal case after a
+# reboot: the deny is restored from the site ruleset, then people log in.
+# Appending shadowed every one of them. Inserting means position within the
+# chain stops mattering at all, which is what the deployment contract in
+# ADMIN_GUIDE is allowed to claim.
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule_insert a
+check E8 PASS "$(verdict $OK_SRC $SVC)" "deny placed BEFORE any session, jump inserted"
+printf "       sess-a=%s (>0 proves the jump ran ahead of a deny that predates it)\n" "$(cnt sess-a)"
+
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
 # ======================================================================
