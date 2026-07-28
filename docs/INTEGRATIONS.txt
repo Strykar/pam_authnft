@@ -313,11 +313,36 @@ pam_authnft creates a shared base chain and a per-session chain:
     }
 
 Fragments add rules into their per-session chain via
-`add rule inet authnft @session_chain ...`. Fragments MAY also add
-rules to the shared `filter` chain, but SHOULD NOT use drop/reject
-actions there (those rules persist across sessions and affect all
-traffic). Fragments MAY create additional chains; these are not
-cleaned up by pam_authnft and persist for the table's lifetime.
+`add rule inet authnft @session_chain ...`.
+
+A top-level fragment MUST NOT add rules to the shared `filter` chain.
+`add rule inet authnft filter ...` is rejected and the session is
+denied, because such a rule persists across sessions and affects every
+other session's traffic. Shared-chain rules belong in an included file,
+which is the composition mechanism §4.6 describes and the only place
+the validator permits them.
+
+Wherever they land, shared-chain rules SHOULD NOT use drop or reject
+actions: they persist across sessions and affect all traffic.
+
+Fragments MAY create additional chains; these are not cleaned up by
+pam_authnft and persist for the table's lifetime.
+
+What the validator checks, and where it stops:
+
+    top-level fragment    verb denylist, shared-chain guard,
+                          include-path rules
+    included file         verb denylist, include-path rules
+                          (shared-chain guard deliberately relaxed,
+                          see §4.6)
+
+Both are scanned. Before the fix for issue #108 the scan covered only
+the top-level buffer while libnftables resolved includes at execution,
+so an included `flush ruleset` ran and the module reported success.
+Included files are now opened, permission-checked to the same bar as
+the top-level fragment (root-owned, not world-writable, regular file)
+and scanned, to a depth of 4 and a total of 16 files, with repeats and
+cycles rejected.
 
 4.4 Programmatic fragment generation
 
@@ -352,6 +377,14 @@ libnftables resolves `include` directives transitively when processing
 a user fragment. A per-user fragment MAY pull in shared rules from a
 common file, letting a site maintain base policy once and override or
 extend it per user.
+
+The shared `filter` chain is an included file's documented destination,
+which is why the shared-chain guard of §4.3 does not apply here. Every
+other check does: the verb denylist is enforced on included content,
+and each included file must be a root-owned, non-world-writable regular
+file under /etc/authnft/. Nesting is capped at 4 levels and 16 files
+total; a file that includes itself, or that is included twice, is
+rejected. A rejection denies the session.
 
 Convention: keep shared fragments under a subdirectory of
 /etc/authnft/ (for example, /etc/authnft/groups/) and reference them by

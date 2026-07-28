@@ -1,0 +1,22 @@
+trace id 8bad7325 inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 3268665353 
+trace id 8bad7325 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 37285 ip protocol tcp ip length 60 tcp sport 50805 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id 8bad7325 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id 8bad7325 inet authnft trace_hook policy accept 
+trace id 8bad7325 inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 3268665353 
+trace id 8bad7325 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 37285 ip protocol tcp ip length 60 tcp sport 50805 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id 8bad7325 inet authnft filter rule jump session_a (verdict jump session_a)
+trace id 8bad7325 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
+trace id 8bad7325 inet authnft sitedeny conntrack: ct direction original ct state new ct status confirmed ct id 3268665353 
+trace id 8bad7325 inet authnft sitedeny packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 37285 ip protocol tcp ip length 60 tcp sport 50805 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id 8bad7325 inet authnft sitedeny policy drop 
+trace id fcadbbd4 inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 3268665353 
+trace id fcadbbd4 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 37286 ip protocol tcp ip length 60 tcp sport 50805 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id fcadbbd4 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id fcadbbd4 inet authnft trace_hook policy accept 
+trace id fcadbbd4 inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 3268665353 
+trace id fcadbbd4 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 37286 ip protocol tcp ip length 60 tcp sport 50805 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id fcadbbd4 inet authnft filter rule jump session_a (verdict jump session_a)
+trace id fcadbbd4 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
+trace id fcadbbd4 inet authnft sitedeny conntrack: ct direction original ct state new ct status confirmed ct id 3268665353 
+trace id fcadbbd4 inet authnft sitedeny packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 37286 ip protocol tcp ip length 60 tcp sport 50805 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id fcadbbd4 inet authnft sitedeny policy drop 

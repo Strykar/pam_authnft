@@ -74,7 +74,8 @@ static size_t next_token(const char **pp, const char *end,
  * Matching is token-based, so extra or non-canonical whitespace between
  * keywords does not evade the shared-chain guard. Returns 0 on accept. */
 static int check_statement(pam_handle_t *pamh, const char *path, int lineno,
-                           const char *s, const char *e)
+                           const char *s, const char *e,
+                           unsigned flags, nft_include_cb cb, void *cb_ctx)
 {
     const char *p = s;
     char t0[32];
@@ -92,8 +93,11 @@ static int check_statement(pam_handle_t *pamh, const char *path, int lineno,
 
     /* Shared-chain guard: reject "add rule inet authnft filter ...". Rules a
      * fragment installs there persist across sessions and affect every other
-     * session; per-session rules must go through @session_chain. */
-    if (strcmp(t0, "add") == 0) {
+     * session; per-session rules must go through @session_chain.
+     *
+     * Not applied to included files: INTEGRATIONS.txt §4.6 makes the shared
+     * chain their documented destination. */
+    if (!(flags & NFT_FRAG_INCLUDED) && strcmp(t0, "add") == 0) {
         static const char *const shared[5] =
             { "add", "rule", "inet", TABLE_NAME, "filter" };
         const char *q = s;
@@ -162,6 +166,13 @@ static int check_statement(pam_handle_t *pamh, const char *path, int lineno,
                 return -1;
             }
         }
+
+        /* Path shape is sound. Hand it to the caller, which owns the
+         * filesystem side: stat it, read it, validate what comes back.
+         * Without this the scan stops here and libnftables executes the
+         * contents unseen. */
+        if (cb && cb(cb_ctx, ps) < 0)
+            return -1;
     }
 
     return 0;
@@ -186,6 +197,14 @@ static int check_statement(pam_handle_t *pamh, const char *path, int lineno,
  */
 int validate_fragment_buf(pam_handle_t *pamh, const char *path,
                           const char *buf, size_t buf_len)
+{
+    return validate_fragment_buf_ex(pamh, path, buf, buf_len, 0, NULL, NULL);
+}
+
+int validate_fragment_buf_ex(pam_handle_t *pamh, const char *path,
+                             const char *buf, size_t buf_len,
+                             unsigned flags,
+                             nft_include_cb cb, void *cb_ctx)
 {
     const char *end = buf + buf_len;
     const char *stmt = buf;      /* start of the current statement */
@@ -221,7 +240,8 @@ int validate_fragment_buf(pam_handle_t *pamh, const char *path,
 
         if (is_sep) {
             if (has_content &&
-                check_statement(pamh, path, stmt_lineno, stmt, p) < 0)
+                check_statement(pamh, path, stmt_lineno, stmt, p,
+                                flags, cb, cb_ctx) < 0)
                 return -1;
             stmt = p + 1;
             has_content = 0;
@@ -237,7 +257,8 @@ int validate_fragment_buf(pam_handle_t *pamh, const char *path,
      * needs checking, and has_content stays 0 for a comment-only tail, so a
      * pure trailing comment is not spuriously validated. */
     if (has_content &&
-        check_statement(pamh, path, stmt_lineno, stmt, end) < 0)
+        check_statement(pamh, path, stmt_lineno, stmt, end,
+                        flags, cb, cb_ctx) < 0)
         return -1;
 
     return 0;

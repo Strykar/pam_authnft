@@ -1,0 +1,43 @@
+trace id d6ec0625 inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 1916725229 
+trace id d6ec0625 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64512 ip protocol tcp ip length 60 tcp sport 37259 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id d6ec0625 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id d6ec0625 inet authnft trace_hook policy accept 
+trace id d6ec0625 inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 1916725229 
+trace id d6ec0625 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64512 ip protocol tcp ip length 60 tcp sport 37259 tcp dport 19100 tcp flags == syn tcp window 65535 
+trace id d6ec0625 inet authnft filter rule jump session_a (verdict jump session_a)
+trace id d6ec0625 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
+trace id 3820b1bb inet authnft trace_hook conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id 3820b1bb inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64513 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == ack tcp window 1024 
+trace id 3820b1bb inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id 3820b1bb inet authnft trace_hook policy accept 
+trace id 3820b1bb inet authnft filter conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id 3820b1bb inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64513 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == ack tcp window 1024 
+trace id 3820b1bb inet authnft filter rule ct state established,related counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+trace id d6ec0625 inet authnft trace_hook conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id d6ec0625 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64514 ip protocol tcp ip length 57 tcp sport 37259 tcp dport 19100 tcp flags == 0x18 tcp window 1024 
+trace id d6ec0625 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id d6ec0625 inet authnft trace_hook policy accept 
+trace id d6ec0625 inet authnft filter conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id d6ec0625 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64514 ip protocol tcp ip length 57 tcp sport 37259 tcp dport 19100 tcp flags == 0x18 tcp window 1024 
+trace id d6ec0625 inet authnft filter rule ct state established,related counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+trace id e90d6dfc inet authnft trace_hook conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id e90d6dfc inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64515 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == 0x11 tcp window 1024 
+trace id e90d6dfc inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id e90d6dfc inet authnft trace_hook policy accept 
+trace id e90d6dfc inet authnft filter conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id e90d6dfc inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64515 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == 0x11 tcp window 1024 
+trace id e90d6dfc inet authnft filter rule ct state established,related counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+trace id af6ba138 inet authnft trace_hook conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id af6ba138 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64516 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == ack tcp window 1024 
+trace id af6ba138 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id af6ba138 inet authnft trace_hook policy accept 
+trace id af6ba138 inet authnft filter conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id af6ba138 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64516 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == ack tcp window 1024 
+trace id af6ba138 inet authnft filter rule ct state established,related counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+trace id af6ba138 inet authnft trace_hook conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id af6ba138 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64517 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == ack tcp window 1024 
+trace id af6ba138 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
+trace id af6ba138 inet authnft trace_hook policy accept 
+trace id af6ba138 inet authnft filter conntrack: ct direction original ct state established ct status seen-reply,assured,confirmed ct id 1916725229 
+trace id af6ba138 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 64517 ip protocol tcp ip length 52 tcp sport 37259 tcp dport 19100 tcp flags == ack tcp window 1024 
+trace id af6ba138 inet authnft filter rule ct state established,related counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)

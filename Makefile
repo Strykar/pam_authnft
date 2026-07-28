@@ -189,6 +189,30 @@ test-integration: $(TEST_BIN)
 test-packet-match:
 	sudo ./tests/packet_match_headless.sh
 
+# Does a packet get through, or not? test-packet-match proves rules MATCH;
+# this proves what the wire does with them, allow and deny both, across
+# session open, session close and the placements an admin can pick for the
+# site's default-deny. It runs in a throwaway netns, so the deny rules it
+# needs cannot touch the host. Set AUTHNFT_TRACE_DIR to keep the
+# `nft monitor trace` captures.
+test-packet-flow:
+	sudo ./tests/packet_flow_matrix.sh
+
+# Fragment include walk (#108). The unit tests cover the pure half; this
+# covers the half that needs a filesystem, that a real included file is
+# opened, permission-checked and scanned. Runs in a private mount namespace
+# with a tmpfs over /etc/authnft, so the host's own /etc/authnft is untouched.
+# Needs root for the bind mount and nothing else.
+INCLUDE_WALK_DRIVER = tests/include_walk_driver
+
+$(INCLUDE_WALK_DRIVER): tests/include_walk_driver.c $(OBJS) include/nft_validator.h
+	$(CC) $(CFLAGS_BASE) $(LDFLAGS_BASE) -g -O1 \
+	    tests/include_walk_driver.c $(OBJS) -o $@ \
+	    `$(PKG_CONFIG) --libs $(LIBS)`
+
+test-include-walk: $(INCLUDE_WALK_DRIVER)
+	sudo ./tests/include_walk_test.sh
+
 # Containerised workflows. Every test surface the project ships runs
 # inside a booted-systemd container on any host with podman or docker
 # — no sudo required, no host state mutation.
@@ -678,7 +702,7 @@ fuzz-coverage-gate:
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
 clean:
-	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(TEST_PEER_LOOKUP) $(ORACLE_RUNNER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
+	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(TEST_PEER_LOOKUP) $(ORACLE_RUNNER) $(INCLUDE_WALK_DRIVER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
 
 distclean: clean
 	@if sudo nft list tables 2>/dev/null | grep -q "inet authnft"; then \
@@ -686,7 +710,7 @@ distclean: clean
 	fi
 	@sudo rm -f /etc/pam.d/authnft_test /etc/authnft/users/$(TEST_USER)
 
-.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-container \
+.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-packet-flow test-include-walk test-container \
         test-integration-container test-musl trace trace-container trace-features \
         audit audit-container docs-drift \
         distclean install install-tmpfiles uninstall man install-man

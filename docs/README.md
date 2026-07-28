@@ -9,6 +9,7 @@
 | [CONTRIBUTING.txt](CONTRIBUTING.txt) | Where help is wanted, build, layout, invariants, style, test policy, DCO, seccomp allowlist derivation |
 | [GOVERNANCE.md](GOVERNANCE.md) | Decision making, roles, access continuity and the named successor |
 | [ASSURANCE_CASE.md](ASSURANCE_CASE.md) | Structured security argument: claims, threat model, trust boundaries, design and implementation-weakness counters, residual risks |
+| [ALTERNATIVES.md](ALTERNATIVES.md) | Why not systemd `NFTSet=`, and why `socket cgroupv2` cannot gate a forwarding gateway |
 | [ROADMAP.md](ROADMAP.md) | What is stable now, what may change before 1.0, and what is planned |
 | [TODO.txt](TODO.txt) | Near-term, medium-term, and deferred work items |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Authoritative dependency inventory: licences, version floors, security feeds |
