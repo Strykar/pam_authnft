@@ -214,6 +214,61 @@ for the permissions of every transitively included file. See
 [INTEGRATIONS.txt](INTEGRATIONS.txt) §4.6 for the composition
 pattern, security notes, and cycle-detection guidance.
 
+### Where the site's default-deny goes
+
+pam_authnft only ever adds `accept` rules. Whatever denies traffic lives
+outside the module, and where you put it decides whether the module does
+anything at all. Every statement in this section is pinned by a case in
+`make test-packet-flow`; the case ids are in brackets.
+
+**Put it in the module's own chain.**
+
+```
+# after `make install`, once the table exists
+sudo nft add rule inet authnft filter tcp dport { 5432, 6379 } counter drop \
+    comment '"site-default-deny"'
+```
+
+Position within that chain does not matter. The module inserts each
+session's jump at the head, so every jump precedes your deny however many
+sessions open afterwards, and whether the deny was placed before or after
+any of them [E6, E8]. Before this the module appended, and a session
+opened after the deny was never reached: it authenticated, installed
+correct-looking rules, showed a moving counter and passed no traffic,
+while an earlier session on the same host kept working [E4, E5].
+
+**Do not use a separate base chain with `policy drop`.** This is the
+arrangement most operators reach for and it silently defeats the module
+[E3]:
+
+```
+# BROKEN — the module accepts, this chain drops anyway
+table inet myfilter {
+    chain input { type filter hook input priority filter; policy drop; }
+}
+```
+
+`accept` ends the chain it fires in, not the hook. The packet still
+traverses the next base chain, and a drop policy there kills it. The
+module's counter shows the accept happening; the connection is dead
+regardless. This is netfilter semantics, not a module limitation, and no
+rule ordering fixes it: a module that only accepts cannot override a
+later chain's drop.
+
+If your site policy has to live in its own table, that table must be
+taught to honour the module's decision rather than run a blanket drop
+after it. There is no mechanism for that in this release; track #105.
+
+**After a reboot** the `inet authnft` table does not exist until the
+first session opens, so a deny placed inside it does not survive. Re-apply
+it from whatever loads your ruleset, tolerating the table's absence:
+
+```
+nft list table inet authnft >/dev/null 2>&1 && \
+    nft add rule inet authnft filter tcp dport { 5432, 6379 } counter drop \
+        comment '"site-default-deny"'
+```
+
 ### nftables state after session open
 
 ```
