@@ -38,7 +38,12 @@ SCOPE_B=authnft-flow-bob
 # ---------------------------------------------------------------- outer
 if [[ "${1:-}" != "--inner" ]]; then
     [[ $EUID -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
-    for t in ip nft socat ss systemd-run systemctl; do
+    # conntrack(8) is required, not optional: D3 is the only case that
+    # shows the flush revoking an established flow, and ASSURANCE_CASE
+    # C3 and CONCEPTS both cite D1 to D3 as the pin for the revocation
+    # bound. Skipping it while still reporting success would leave two
+    # shipped docs citing an arm that never ran.
+    for t in ip nft socat ss systemd-run systemctl conntrack; do
         command -v "$t" >/dev/null 2>&1 || { echo "missing required tool: $t" >&2; exit 1; }
     done
     [[ -e /sys/fs/cgroup/cgroup.controllers ]] || {
@@ -312,15 +317,10 @@ if read -t 3 -r _ <&4; then D1=PASS; else D1=BLOCK; fi
 check D1 PASS  "$D1" "flow admitted during the session, after close_session"
 check D2 BLOCK "$(verdict $OK_SRC $SVC)" "new flow after close_session"
 
-if command -v conntrack >/dev/null 2>&1; then
-    conntrack -D -s "$OK_SRC" >/dev/null 2>&1
-    printf 'three\n' >&4
-    if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
-    check D3 BLOCK "$D3" "same flow after a conntrack flush by source address"
-else
-    printf "${YELLOW}[SKIP]${RESET} D3     conntrack(8) not installed\n"
-    ROWS+=("D3|BLOCK|SKIP|skip|same flow after a conntrack flush by source address")
-fi
+conntrack -D -s "$OK_SRC" >/dev/null 2>&1
+printf 'three\n' >&4
+if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
+check D3 BLOCK "$D3" "same flow after a conntrack flush by source address"
 exec 4<&- 2>/dev/null
 
 # ======================================================================
@@ -371,12 +371,15 @@ add rule inet authnft frag_extra tcp dport $ALT counter drop comment "frag-chain
 add rule inet authnft session_a jump frag_extra
 RULES
 ct_rule; jump_rule a; site_deny "$SVC"
-# A fragment rule in the SHARED chain. A top-level fragment cannot do this:
-# check_statement in src/nft_validator.c rejects "add rule inet authnft
-# filter ...". An included file can, because validate_fragment_buf only ever
-# sees the top-level buffer and libnftables resolves includes later, at
-# execution. INTEGRATIONS 4.6 recommends the include pattern. The point of
-# the case is what the leftover rule does to traffic once the session ends.
+# A fragment rule in the SHARED chain. A top-level fragment cannot do this
+# (check_statement rejects "add rule inet authnft filter ..."), but an
+# included file is allowed to: NFT_FRAG_INCLUDED drops the shared-chain guard
+# because INTEGRATIONS 4.6 makes the shared chain the documented target for
+# included rules. The rule is validated, just not cleaned up: it lives outside
+# the per-session chain, so close_session never had a handle on it (INTEGRATIONS
+# 4.5). The point of the case is what that leftover rule does to traffic once
+# the session ends. The harness adds it with plain nft because it is measuring
+# the leftover, not the include walk (that path is covered by test-include-walk).
 nft add rule inet authnft filter tcp dport 19102 counter drop comment '"frag-shared-deny"' || die "shared frag rule"
 
 exec 6<>/dev/tcp/127.0.0.1/$SVC || die "G flow would not open"
