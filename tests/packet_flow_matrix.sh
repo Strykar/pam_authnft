@@ -456,6 +456,148 @@ check G5 BLOCK "$(verdict $OK_SRC 19102)" "leftover shared-chain fragment rule s
 exec 6<&- 2>/dev/null
 
 # ======================================================================
+note "I. Conntrack revocation: the ct mark gate proposed for #103"
+# ======================================================================
+# D1 is the gap: a flow admitted during a session keeps passing after close,
+# because the shared established-accept fires before any session jump and
+# conntrack never hears about the teardown.
+#
+# The proposed shape. Each session tags new connections with an id in the low
+# 24 bits of ct mark. The shared established-accept is split in two: untagged
+# flows (the SSH connection, everything the module does not govern) accept
+# unconditionally; tagged flows accept only while their id is in a live
+# sessions set. Close deletes the element, so the next packet of a revoked
+# flow falls through to the site deny.
+#
+# None of this is in the module. These arms decide whether it is worth
+# building, against the real chain layout rather than a synthetic one, and
+# with a real pre-session flow standing in for the SSH connection, because
+# breaking that locks everyone out of the host.
+SESS_MASK=0x00ffffff     # the slice a session id lives in
+ADMIN_MASK=0xff000000    # bits the admin keeps
+ADMIN_BITS=0xab000000    # what an admin rule puts there first
+CTM_A=0x000001
+CTM_B=0x000002
+
+# The shared chain, with the established-accept split. Order matches the
+# module: jumps are inserted at the head, everything else appended.
+ctmark_up() { # <session-tag> <cgroup> <src> <session-id>
+    local tag="$1" cg="$2" src="$3" sid="$4"
+    nft -f - <<RULES || die "ct mark gate setup for $tag"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add set inet authnft live_sessions { type mark; }
+add chain inet authnft session_$tag
+add set inet authnft session_${tag}_v4 { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }
+add set inet authnft session_${tag}_v6 { typeof socket cgroupv2 level 2 . ip6 saddr; flags timeout; }
+add set inet authnft session_${tag}_cg { typeof socket cgroupv2 level 2; flags timeout; }
+add element inet authnft session_${tag}_v4 { "$cg" . $src timeout 1d }
+add rule inet authnft session_$tag ct state new ct mark set ct mark and $ADMIN_MASK or $sid counter comment "tag-$tag"
+add rule inet authnft session_$tag socket cgroupv2 level 2 . ip saddr @session_${tag}_v4 tcp dport $SVC counter accept comment "sess-$tag"
+add element inet authnft live_sessions { $sid }
+RULES
+    nft insert rule inet authnft filter jump "session_$tag" || die "jump for $tag"
+}
+
+# Order matters and cost an hour: the unsessioned flow has to be opened
+# before the deny exists and before the session does, because it stands in
+# for the SSH connection that carried the login in. Opening it after the
+# deny hangs on the TCP connect timeout rather than failing, which is why
+# hold_open() bounds the connect.
+# Discard anything already queued on the socket before probing it. Without
+# this a reply that was in flight when the rules changed is read by the NEXT
+# probe and reports a revoked flow as alive, one assertion late. Same trap as
+# the nonce matching in tests/ct_mark_revocation_matrix.sh.
+drain() { local fd="$1" _junk; while read -r -t 0.3 -u "$fd" _junk 2>/dev/null; do :; done; return 0; }
+
+hold_open() { # <fd> <port>   returns 1 rather than blocking on a dropped SYN
+    local fd="$1" port="$2"
+    timeout 5 bash -c "exec 9<>/dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
+    eval "exec $fd<>/dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
+    return 0
+}
+
+table_down
+# The gate, installed before any flow exists. C3 established that a ct rule
+# added after a flow opened does not rescue it, so the gate has to predate
+# the connection it is meant to carry. An admin rule claims the high bits
+# first, so nothing below passes by comparing against a bare zero.
+nft -f - <<RULES || die "I: gate setup"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add set inet authnft live_sessions { type mark; }
+add chain inet authnft adminmark { type filter hook input priority filter - 10; policy accept; }
+add rule inet authnft adminmark ct state new ct mark set ct mark or $ADMIN_BITS counter comment "admin-mark"
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK 0x0 counter accept comment "est-unsessioned"
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK @live_sessions counter accept comment "est-live"
+RULES
+
+# The SSH connection. Established before the session and before the deny,
+# never tagged. If this arm ever fails, the change locks the operator out.
+hold_open 7 "$ALT" || die "I: could not open the unsessioned flow"
+printf 'one\n' >&7; read -t 3 -r _ <&7 || die "I: unsessioned flow never worked"
+
+ctmark_up a "$CG_A" "$OK_SRC" "$CTM_A"
+site_deny "$SVC"; site_deny "$ALT"
+
+hold_open 8 "$SVC" || die "I: session flow would not open"
+printf 'one\n' >&8; read -t 3 -r _ <&8 || die "I: session flow never worked"
+check I1 PASS "PASS" "session flow admitted while the session is live (control)"
+# Earlier sections leave a dozen conntrack entries on this port in TIME_WAIT
+# and SYN_SENT. Filtering to the single ESTABLISHED one is what makes this
+# reproducible; head -1 over all of them returned a different mark per run.
+session_mark() {
+    local rows n
+    rows=$(conntrack -L -p tcp --dport "$SVC" --state ESTABLISHED 2>/dev/null) || rows=""
+    n=$(printf '%s' "$rows" | grep -c 'mark=') || n=0
+    if [[ "$n" -ne 1 ]]; then echo "AMBIGUOUS:$n"; return 0; fi
+    printf '0x%08x' "$(printf '%s' "$rows" | grep -oP 'mark=\K[0-9]+' | head -1)"
+}
+CTM_LIVE=$(session_mark)
+printf "       session entry mark: %s (want %s | %s)\n" "$CTM_LIVE" "$ADMIN_BITS" "$CTM_A"
+
+# Close, exactly as close_session would: drop the live-sessions element,
+# then tear the per-session objects down.
+nft delete element inet authnft live_sessions "{ $CTM_A }" || die "I: could not revoke"
+module_down a
+
+printf "       jumps left after close: %s (0 proves the teardown transaction committed)\n" \
+    "$(nft list chain inet authnft filter 2>/dev/null | grep -c 'jump session_' || true)"
+drain 8; printf 'two\n' >&8
+if read -t 3 -r _ <&8; then I2=PASS; else I2=BLOCK; fi
+check I2 BLOCK "$I2" "flow admitted during the session, after close (D1 fixed)"
+
+drain 7; printf 'two\n' >&7
+if read -t 3 -r _ <&7; then I3=PASS; else I3=BLOCK; fi
+check I3 PASS "$I3" "untagged flow survives the same close (the SSH connection)"
+printf "       est-unsessioned=%s est-live=%s\n" "$(cnt est-unsessioned)" "$(cnt est-live)"
+
+# Id reuse. The stale entry still carries the old id, so a new session handed
+# the same id resurrects a flow that was revoked. This is the constraint any
+# implementation must solve, and the arm exists so it cannot be forgotten.
+nft add element inet authnft live_sessions "{ $CTM_A }" || die "I: could not re-add"
+drain 8; printf 'three\n' >&8
+if read -t 3 -r _ <&8; then I4=PASS; else I4=BLOCK; fi
+check I4 PASS "$I4" "reusing a session id resurrects the revoked flow (why ids must not repeat)"
+
+nft delete element inet authnft live_sessions "{ $CTM_A }" || die "I: could not re-revoke"
+nft add element inet authnft live_sessions "{ $CTM_B }" || die "I: could not add a fresh id"
+drain 8; printf 'four\n' >&8
+if read -t 3 -r _ <&8; then I5=PASS; else I5=BLOCK; fi
+check I5 BLOCK "$I5" "a fresh id does not resurrect it (I4 control)"
+
+# The tag is written once, at connection setup, so the reading taken while
+# the session was live is what answers this.
+if [[ "$CTM_LIVE" == AMBIGUOUS:* ]]; then
+    check I6 PASS BLOCK "admin mark bits preserved (could not isolate the flow: $CTM_LIVE)"
+else
+    CTM_ADMIN=$(printf '0x%08x' $(( CTM_LIVE & 0xff000000 )))
+    check I6 PASS "$([[ "$CTM_ADMIN" == "$ADMIN_BITS" ]] && echo PASS || echo BLOCK)" \
+        "the session tag preserved the admin's mark bits ($CTM_LIVE, admin slice $CTM_ADMIN)"
+fi
+exec 7<&- 2>/dev/null; exec 8<&- 2>/dev/null
+
+# ======================================================================
 note "H. Packet traces: the kernel's own account of the traversal"
 # ======================================================================
 # Counters say a rule matched. A trace says which chains the packet walked,
