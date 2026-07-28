@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <grp.h>
 #include <pwd.h>
@@ -94,6 +95,76 @@ static char *read_file(const char *path, size_t *out_len) {
 #define INC_MAX_FILES 16
 #define INC_PATH_MAX  256
 
+/*
+ * The directory a fragment or an included file lives in must be root-only.
+ *
+ * This is the check that carries the confidentiality, not the file mode.
+ * With a 0700 directory a non-root user cannot traverse in, so a 0644
+ * fragment is unreachable; without it, 0644 exposes every user's network
+ * policy to every local user, and the file mode is the only thing left
+ * standing. examples_generator.sh has emitted `chmod 700` here since the
+ * beginning and called it "root-owned, not world-readable", `make install`
+ * left it 0755, the docs never stated it as a requirement, and nothing
+ * verified it. All four now agree.
+ */
+static int check_dir_root_only(pam_handle_t *pamh, const char *file_path)
+{
+    char dir[PATH_MAX];
+    const char *slash = strrchr(file_path, '/');
+    struct stat ds;
+
+    if (!slash || slash == file_path) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot derive directory of %s", file_path);
+        return -1;
+    }
+    size_t n = (size_t)(slash - file_path);
+    if (n >= sizeof(dir)) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: directory path too long for %s", file_path);
+        return -1;
+    }
+    memcpy(dir, file_path, n);
+    dir[n] = '\0';
+
+    if (stat(dir, &ds) != 0) {
+        pam_syslog(pamh, LOG_ERR, "authnft: cannot stat %s", dir);
+        return -1;
+    }
+    if (ds.st_uid != 0 || (ds.st_mode & (S_IRWXG | S_IRWXO))) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: %s must be root-only (want 0700 root:root, "
+                   "have %04o uid=%d)",
+                   dir, ds.st_mode & 07777, ds.st_uid);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Permission bar for a fragment or an included file: root-owned, and not
+ * writable by group or other.
+ *
+ * Group-write is the one that matters. `authnft` is exactly the set of
+ * users the module gates, so a 0664 root:authnft fragment lets any gated
+ * user rewrite any other's rules and have them installed as root at the
+ * next session open. Nothing legitimate needs it, so rejecting it costs
+ * nothing; 0644 stays valid, which is what INTEGRATIONS.txt §4.4 tells
+ * producers to write.
+ */
+static int check_file_perms(pam_handle_t *pamh, const char *path,
+                            const struct stat *fs)
+{
+    if (fs->st_uid != 0 || (fs->st_mode & (S_IWGRP | S_IWOTH))) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: insecure permissions on %s (uid=%d mode=%04o); "
+                   "must be root-owned and not group- or world-writable",
+                   path, fs->st_uid, fs->st_mode & 07777);
+        return -1;
+    }
+    return 0;
+}
+
 struct include_walk {
     pam_handle_t *pamh;
     int depth;
@@ -148,12 +219,9 @@ static int validate_include(void *ctx, const char *inc_path) {
                    "authnft: include %s is not a regular file", inc_path);
         return -1;
     }
-    if (ist.st_uid != 0 || (ist.st_mode & S_IWOTH)) {
-        pam_syslog(w->pamh, LOG_ERR,
-                   "authnft: insecure permissions on include %s "
-                   "(uid=%d mode=%o)", inc_path, ist.st_uid, ist.st_mode);
+    if (check_file_perms(w->pamh, inc_path, &ist) < 0 ||
+        check_dir_root_only(w->pamh, inc_path) < 0)
         return -1;
-    }
 
     size_t ilen = 0;
     char *ibuf = read_file(inc_path, &ilen);
@@ -292,7 +360,8 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * rather than lingering in the sshd monitor that owns the transient scope.
      * A non-member never reaches this function. */
 
-    /* Fragment validation: must exist, be root-owned, and not world-writable. */
+    /* Fragment validation: must exist, clear the permission bar, and sit
+     * in a root-only directory. See check_file_perms/check_dir_root_only. */
     snprintf(user_conf_path, sizeof(user_conf_path), "%s/%s", RULES_DIR, user);
     DEBUG_PRINT("loading fragment: %s", user_conf_path);
 
@@ -304,10 +373,8 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         return PAM_AUTH_ERR;
     }
 
-    if (st.st_uid != 0 || (st.st_mode & S_IWOTH)) {
-        (void)pam_syslog(pamh, LOG_ERR,
-                         "authnft: insecure permissions on %s (uid=%d mode=%o)",
-                         user_conf_path, st.st_uid, st.st_mode);
+    if (check_file_perms(pamh, user_conf_path, &st) < 0 ||
+        check_dir_root_only(pamh, user_conf_path) < 0) {
         authnft_audit_fragment_reject(user, "perms", user_conf_path);
         if (reason) *reason = AUTHNFT_REJECT_FRAGMENT_PERMS;
         return PAM_AUTH_ERR;

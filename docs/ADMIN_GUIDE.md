@@ -58,12 +58,24 @@ sudo groupadd authnft
 # Add a user to the group
 sudo usermod -aG authnft alice
 
+# The fragment directory must be root-only. `make install` creates it
+# 0700; check it if the directory was made by hand or by a config tool.
+sudo chmod 700 /etc/authnft /etc/authnft/users
+
 # Create a root-owned fragment for that user
 sudo tee /etc/authnft/users/alice > /dev/null <<'EOF'
 add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
 EOF
 sudo chmod 644 /etc/authnft/users/alice
 ```
+
+The module checks both at every session open. The fragment must be
+root-owned and not writable by group or other, and its directory must be
+0700 root:root. A session whose fragment or directory fails either check
+is denied, with the reason in the log. The directory matters more than
+the file mode: with 0700 nobody but root can traverse in, so a 0644
+fragment is unreadable to other users; at 0755 it is readable by
+everyone on the host.
 
 Add to `/etc/pam.d/sshd` (after `pam_systemd.so`):
 ```

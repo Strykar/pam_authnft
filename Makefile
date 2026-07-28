@@ -515,7 +515,8 @@ $(TEST_UTIL_VALIDATOR).mull: $(OBJ_DIR)/test_util_validators.mull.o $(OBJ_DIR)/u
 	$(MULL_CLANG) $(MULL_EXTRA_CFLAGS) $^ -o $@
 
 install: $(TARGET) install-tmpfiles
-	install -d $(DESTDIR)/etc/authnft/users
+	install -d -m 0700 $(DESTDIR)/etc/authnft
+	install -d -m 0700 $(DESTDIR)/etc/authnft/users
 	install -d $(DESTDIR)$(PAM_DIR)
 	install -m 755 $(TARGET) $(DESTDIR)$(PAM_DIR)/$(TARGET)
 	install -d $(DESTDIR)$(UNIT_DIR)

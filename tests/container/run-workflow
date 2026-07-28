@@ -91,6 +91,7 @@ case "$WORKFLOW" in
         # Reuses trace.sh's test user + PAM config setup inline.
         make clean >/dev/null && make >/dev/null
         mkdir -p /etc/authnft/users
+        chmod 700 /etc/authnft /etc/authnft/users
         getent group authnft >/dev/null || groupadd authnft
         getent passwd authnft-test >/dev/null \
           || useradd -r -s /usr/sbin/nologin -G authnft authnft-test

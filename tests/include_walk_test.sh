@@ -39,10 +39,21 @@ printf 'include "/etc/authnft/groups/loop.nft"\n' > "$FIX/groups/loop.nft"
 # permission failures
 printf 'add rule inet authnft filter accept\n' > "$FIX/groups/worldwrite.nft"
 printf 'add rule inet authnft filter accept\n' > "$FIX/groups/nonroot.nft"
+printf 'add rule inet authnft filter accept\n' > "$FIX/groups/groupwrite.nft"
 
 chown -R 0:0 "$FIX"
+# the walk now requires the containing directory to be root-only
+chmod 700 "$FIX" "$FIX/groups"
+
+# impeccable file, loose directory: must still be rejected
+mkdir -p "$FIX/loose"
+printf 'add rule inet authnft filter accept\n' > "$FIX/loose/ok.nft"
+chown -R 0:0 "$FIX/loose"
+chmod 644 "$FIX/loose/ok.nft"
+chmod 755 "$FIX/loose"
 chmod 644 "$FIX"/groups/*.nft
 chmod 666 "$FIX/groups/worldwrite.nft"
+chmod 664 "$FIX/groups/groupwrite.nft"   # the bar this tightening closes
 chown 65534:65534 "$FIX/groups/nonroot.nft"
 
 mkdir -p /etc/authnft

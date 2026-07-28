@@ -63,6 +63,7 @@ if ! getent passwd "$TEST_USER" > /dev/null 2>&1; then
 fi
 
 mkdir -p "$RULES_DIR"
+chmod 700 /etc/authnft "$RULES_DIR"
 echo 'add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept' \
     > "$RULES_DIR/$TEST_USER"
 chown root:root "$RULES_DIR/$TEST_USER"

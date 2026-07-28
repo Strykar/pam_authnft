@@ -39,6 +39,7 @@ printf 'auth     required  pam_permit.so\naccount  required  pam_permit.so\nsess
 $SUDO groupadd authnft 2>/dev/null || true
 $SUDO useradd -M -s /usr/sbin/nologin -G authnft "$U" 2>/dev/null || true
 $SUDO mkdir -p /etc/authnft/users
+$SUDO chmod 700 /etc/authnft /etc/authnft/users
 echo 'add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept' \
     | $SUDO tee "$FRAG" >/dev/null
 $SUDO chown root:root "$FRAG"
@@ -46,7 +47,20 @@ $SUDO chmod 666 "$FRAG"   # world-writable -> perms reject
 
 out=$($SUDO "$HARNESS" "$SVC" "$U" 2>/dev/null); rc=$?
 echo "$out"
-if echo "$out" | grep -q 'must be root-owned and not world-writable'; then
+if ! echo "$out" | grep -q 'must be root-owned and not group- or world-writable'; then
+    echo "RESULT: FAIL (world-writable fragment did not produce the reject message; rc=$rc)"
+    exit 1
+fi
+
+# Same reject, reached the other way: an impeccable fragment in a directory
+# that is not root-only. The directory is what stops a non-root user reading
+# every user's policy, so it has to fail closed too.
+$SUDO chmod 644 "$FRAG"
+$SUDO chmod 755 /etc/authnft/users
+out=$($SUDO "$HARNESS" "$SVC" "$U" 2>/dev/null); rc=$?
+echo "$out"
+$SUDO chmod 700 /etc/authnft/users
+if echo "$out" | grep -q 'must be root-owned and not group- or world-writable'; then
     echo "RESULT: PASS (parent delivered the fragment-reject message to the user)"
     exit 0
 fi
