@@ -72,6 +72,123 @@ static char *read_file(const char *path, size_t *out_len) {
 }
 
 /*
+ * Recursive include validation.
+ *
+ * validate_fragment_buf is pure by contract (include/nft_validator.h): it
+ * never opens or stats anything, which is what lets the unit tests, the
+ * fuzzer's memfd harness and the mutation runs drive it with plain
+ * buffers. Include resolution therefore lives here, where the stat(2) and
+ * the read already happen, and re-enters the validator for each file it
+ * pulls in.
+ *
+ * Before this, the scan covered the top-level buffer only while
+ * libnftables resolved includes at execution, so an included file reached
+ * the kernel with no verb check at all. `flush ruleset` in an include ran
+ * and returned 0. Issue #108.
+ *
+ * Included files get NFT_FRAG_INCLUDED, which keeps the verb denylist and
+ * the include-path rules but drops the shared-chain guard, because
+ * INTEGRATIONS.txt §4.6 makes the shared chain their documented target.
+ */
+#define INC_MAX_DEPTH 4
+#define INC_MAX_FILES 16
+#define INC_PATH_MAX  256
+
+struct include_walk {
+    pam_handle_t *pamh;
+    int depth;
+    size_t nseen;
+    char seen[INC_MAX_FILES][INC_PATH_MAX];
+};
+
+static int validate_include(void *ctx, const char *inc_path);
+
+static int validate_include(void *ctx, const char *inc_path) {
+    struct include_walk *w = ctx;
+    struct stat ist;
+
+    if (strlen(inc_path) >= INC_PATH_MAX) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: include path over %d bytes: %s",
+                   INC_PATH_MAX, inc_path);
+        return -1;
+    }
+    /* Doubles as cycle detection and as a repeat-include budget: nftables
+     * has no include guard, so a self-referential file would recurse until
+     * the depth cap and a diamond would be read twice. */
+    for (size_t i = 0; i < w->nseen; i++) {
+        if (strcmp(w->seen[i], inc_path) == 0) {
+            pam_syslog(w->pamh, LOG_ERR,
+                       "authnft: include cycle or repeat: %s", inc_path);
+            return -1;
+        }
+    }
+    if (w->nseen >= INC_MAX_FILES) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: fragment pulls in more than %d files",
+                   INC_MAX_FILES);
+        return -1;
+    }
+    if (w->depth >= INC_MAX_DEPTH) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: include nested deeper than %d: %s",
+                   INC_MAX_DEPTH, inc_path);
+        return -1;
+    }
+
+    /* Same bar the top-level fragment clears. An included file had no
+     * permission check at all before this. */
+    if (stat(inc_path, &ist) != 0) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: missing include %s", inc_path);
+        return -1;
+    }
+    if (!S_ISREG(ist.st_mode)) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: include %s is not a regular file", inc_path);
+        return -1;
+    }
+    if (ist.st_uid != 0 || (ist.st_mode & S_IWOTH)) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: insecure permissions on include %s "
+                   "(uid=%d mode=%o)", inc_path, ist.st_uid, ist.st_mode);
+        return -1;
+    }
+
+    size_t ilen = 0;
+    char *ibuf = read_file(inc_path, &ilen);
+    if (!ibuf) {
+        pam_syslog(w->pamh, LOG_ERR,
+                   "authnft: could not read include %s", inc_path);
+        return -1;
+    }
+
+    snprintf(w->seen[w->nseen], INC_PATH_MAX, "%s", inc_path);
+    w->nseen++;
+    w->depth++;
+    int rc = validate_fragment_buf_ex(w->pamh, inc_path, ibuf, ilen,
+                                      NFT_FRAG_INCLUDED,
+                                      validate_include, w);
+    w->depth--;
+    free(ibuf);
+    return rc;
+}
+
+/*
+ * Test seam: the include walk nft_handler_setup runs, callable without a
+ * PAM stack. Extern per the visibility model in include/nft_validator.h —
+ * pam_authnft.map's `local: *;` keeps it out of the .so ABI, and test
+ * binaries link the .o directly.
+ */
+int authnft_validate_fragment_includes(pam_handle_t *pamh, const char *path,
+                                       const char *buf, size_t buf_len) {
+    struct include_walk iw = { .pamh = pamh, .depth = 0, .nseen = 0 };
+    return validate_fragment_buf_ex(pamh, path, buf, buf_len, 0,
+                                    validate_include, &iw);
+}
+
+
+/*
  * Best-effort rollback of partial nft state created by nft_handler_setup
  * before it failed. Removes the per-session chain, three sets, and (if
  * captured) the jump rule. Tolerates absent objects — if nothing was
@@ -210,8 +327,10 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         return PAM_AUTH_ERR;
     }
 
-    /* Content validation: verb scan, include path check. */
-    if (validate_fragment_buf(pamh, user_conf_path, frag_buf, frag_len) < 0) {
+    /* Content validation: verb scan, include path check, and the contents
+     * of every file the fragment includes (see validate_include). */
+    if (authnft_validate_fragment_includes(pamh, user_conf_path,
+                                          frag_buf, frag_len) < 0) {
         free(frag_buf);
         authnft_audit_fragment_reject(user, "content", user_conf_path);
         if (reason) *reason = AUTHNFT_REJECT_FRAGMENT_CONTENT;

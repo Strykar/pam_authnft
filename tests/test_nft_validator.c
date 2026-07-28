@@ -235,6 +235,103 @@ static void test_legit_multi_statement_accepted(void)
 }
 
 /* -------------------------------------------------------------------- */
+/* validate_fragment_buf_ex — include reporting and the included flag    */
+/* -------------------------------------------------------------------- */
+
+/* Collector standing in for nft_handler.c's validate_include, minus the
+ * filesystem. Keeps these tests pure, which is the whole reason include
+ * resolution lives in the caller and not in the validator. */
+struct seen_includes {
+    int n;
+    char path[8][256];
+    int reject_at;   /* -1 to accept everything */
+};
+
+static int collect_include(void *ctx, const char *inc_path)
+{
+    struct seen_includes *s = ctx;
+    if (s->n < 8)
+        snprintf(s->path[s->n], sizeof(s->path[0]), "%s", inc_path);
+    s->n++;
+    return (s->reject_at >= 0 && s->n > s->reject_at) ? -1 : 0;
+}
+
+static void test_include_paths_reported(void)
+{
+    struct seen_includes s = { .n = 0, .reject_at = -1 };
+    const char *frag =
+        "include \"/etc/authnft/groups/a.nft\"\n"
+        "add rule inet authnft @session_chain accept\n"
+        "include \"/etc/authnft/groups/b.nft\"\n";
+    int rc = validate_fragment_buf_ex(NULL, "test.nft", frag, strlen(frag),
+                                      0, collect_include, &s);
+    EXPECT_EQ_INT(rc, 0);
+    EXPECT_EQ_INT(s.n, 2);
+    /* Quotes must be stripped, or the caller stats a path that cannot exist. */
+    EXPECT(strcmp(s.path[0], "/etc/authnft/groups/a.nft") == 0);
+    EXPECT(strcmp(s.path[1], "/etc/authnft/groups/b.nft") == 0);
+}
+
+static void test_include_callback_rejection_propagates(void)
+{
+    /* A callback that refuses must fail the whole fragment. This is how a
+     * bad verb inside an included file reaches the caller as PAM_AUTH_ERR. */
+    struct seen_includes s = { .n = 0, .reject_at = 0 };
+    const char *frag = "include \"/etc/authnft/groups/a.nft\"\n";
+    int rc = validate_fragment_buf_ex(NULL, "test.nft", frag, strlen(frag),
+                                      0, collect_include, &s);
+    EXPECT_EQ_INT(rc, -1);
+}
+
+static void test_included_flag_relaxes_shared_chain_only(void)
+{
+    /* INTEGRATIONS.txt 4.6 makes the shared chain an included file's
+     * documented target, so it must be accepted there... */
+    const char *shared = "add rule inet authnft filter tcp dport 22 accept\n";
+    EXPECT_EQ_INT(validate_fragment_buf_ex(NULL, "inc.nft", shared,
+                                           strlen(shared),
+                                           NFT_FRAG_INCLUDED, NULL, NULL), 0);
+    /* ...and rejected in a top-level fragment, as before. */
+    EXPECT_EQ_INT(validate_fragment_buf_ex(NULL, "top.nft", shared,
+                                           strlen(shared),
+                                           0, NULL, NULL), -1);
+}
+
+static void test_included_flag_still_rejects_bad_verbs(void)
+{
+    /* The bug in #108: an included file ran with no verb check at all.
+     * Relaxing the shared-chain guard must not relax this. */
+    for (size_t i = 0; i < nft_validator_bad_verbs_count; i++) {
+        char line[128];
+        snprintf(line, sizeof(line), "%s ruleset\n", nft_validator_bad_verbs[i]);
+        int rc = validate_fragment_buf_ex(NULL, "inc.nft", line, strlen(line),
+                                          NFT_FRAG_INCLUDED, NULL, NULL);
+        if (rc != -1)
+            FAIL("verb '%s' accepted inside an included file (rc=%d)",
+                 nft_validator_bad_verbs[i], rc);
+    }
+}
+
+static void test_include_path_rules_apply_when_included(void)
+{
+    /* An include reached through an include is still path-checked, or the
+     * /etc/authnft/ confinement ends one level down. */
+    const char *escape = "include \"/tmp/evil.nft\"\n";
+    EXPECT_EQ_INT(validate_fragment_buf_ex(NULL, "inc.nft", escape,
+                                           strlen(escape),
+                                           NFT_FRAG_INCLUDED, NULL, NULL), -1);
+}
+
+static void test_validate_fragment_buf_unchanged(void)
+{
+    /* The old entry point must behave exactly as before: includes are
+     * path-checked, not followed, and nothing is reported. */
+    const char *frag = "include \"/etc/authnft/groups/a.nft\"\n";
+    EXPECT_EQ_INT(validate_fragment_buf(NULL, "test.nft", frag,
+                                        strlen(frag)), 0);
+}
+
+/* -------------------------------------------------------------------- */
 /* substitute_placeholders — ASan-coupled overflow tests                 */
 /* -------------------------------------------------------------------- */
 
@@ -405,6 +502,13 @@ int main(void)
     test_trailing_comment_bad_verb();
     test_shared_chain_whitespace();
     test_legit_multi_statement_accepted();
+
+    test_include_paths_reported();
+    test_include_callback_rejection_propagates();
+    test_included_flag_relaxes_shared_chain_only();
+    test_included_flag_still_rejects_bad_verbs();
+    test_include_path_rules_apply_when_included();
+    test_validate_fragment_buf_unchanged();
 
     test_substitute_basic();
     test_substitute_token_boundary();

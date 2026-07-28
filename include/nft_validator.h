@@ -39,6 +39,29 @@ extern const size_t       nft_validator_bad_verbs_count;
 int validate_fragment_buf(pam_handle_t *pamh, const char *path,
                           const char *buf, size_t buf_len);
 
+/* Buffer is an included file rather than the top-level fragment.
+ * Relaxes the shared-chain guard only: INTEGRATIONS.txt §4.6 specifies
+ * that included rules land in `chain inet authnft filter`, so rejecting
+ * them would break the documented composition pattern. The verb denylist
+ * and the include-path rules still apply. */
+#define NFT_FRAG_INCLUDED (1u << 0)
+
+/* Called for each syntactically valid include path found, in file order.
+ * Returning a negative value rejects the whole fragment; the callback is
+ * responsible for logging why. This is how include contents get validated
+ * without the validator itself opening anything: the caller already does
+ * the stat(2) and read, so it does them here too and recurses. */
+typedef int (*nft_include_cb)(void *ctx, const char *include_path);
+
+/* validate_fragment_buf plus include reporting. `flags` is 0 or
+ * NFT_FRAG_INCLUDED. `cb` may be NULL, in which case includes are still
+ * path-checked but not reported, and behaviour is identical to
+ * validate_fragment_buf. Still pure: no open, no stat, no readdir. */
+int validate_fragment_buf_ex(pam_handle_t *pamh, const char *path,
+                             const char *buf, size_t buf_len,
+                             unsigned flags,
+                             nft_include_cb cb, void *cb_ctx);
+
 /* Token-aware placeholder substitution for nft fragments. Replaces
  * @session_v4, @session_v6, @session_cg, @session_chain with their
  * per-session expansions. Skips occurrences inside #-comments and
