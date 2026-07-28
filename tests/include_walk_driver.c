@@ -62,6 +62,12 @@ int main(void)
     expect("world-writable include is rejected",
            "include \"/etc/authnft/groups/worldwrite.nft\"\n", -1);
 
+    /* 0664 root:authnft. The old bar accepted this, and `authnft` is
+     * exactly the set of users the module gates, so one of them could
+     * rewrite the rules another gets at their next login. */
+    expect("group-writable include is rejected",
+           "include \"/etc/authnft/groups/groupwrite.nft\"\n", -1);
+
     expect("non-root-owned include is rejected",
            "include \"/etc/authnft/groups/nonroot.nft\"\n", -1);
 
@@ -70,6 +76,12 @@ int main(void)
 
     expect("directory as include is rejected",
            "include \"/etc/authnft/groups\"\n", -1);
+
+    /* The directory carries the confidentiality: with 0700 nobody can
+     * traverse in, which is what makes a 0644 fragment safe. A loose
+     * directory must fail even when the file itself is impeccable. */
+    expect("include under a group-readable directory is rejected",
+           "include \"/etc/authnft/loose/ok.nft\"\n", -1);
 
     if (failures) {
         printf("%d failure(s)\n", failures);

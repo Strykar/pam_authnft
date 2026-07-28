@@ -78,6 +78,7 @@ else
 fi
 
 mkdir -p "$RULES_DIR"
+chmod 700 /etc/authnft "$RULES_DIR"
 
 # Runtime session-file directory. Normally created at boot by
 # /usr/lib/tmpfiles.d/authnft.conf; test harness creates it on demand so

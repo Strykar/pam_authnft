@@ -340,7 +340,8 @@ Both are scanned. Before the fix for issue #108 the scan covered only
 the top-level buffer while libnftables resolved includes at execution,
 so an included `flush ruleset` ran and the module reported success.
 Included files are now opened, permission-checked to the same bar as
-the top-level fragment (root-owned, not world-writable, regular file)
+the top-level fragment (root-owned, not group- or world-writable,
+regular file, in a 0700 root:root directory)
 and scanned, to a depth of 4 and a total of 16 files, with repeats and
 cycles rejected.
 
@@ -353,6 +354,30 @@ identity brokers) SHOULD:
     Use a temporary file + rename(2) for atomicity.
     Validate the fragment with `nft -c -f <file>` before installing.
     Track generation provenance in a comment block for operator sanity.
+
+Permissions the module enforces at every open_session, on the fragment
+and on every file it includes:
+
+    the file           root-owned, and not writable by group or other.
+                       0644 and 0600 both pass; 0664 does not.
+    its directory      root-only, 0700 root:root. Nothing may be
+                       readable, writable or traversable by group or
+                       other.
+
+The directory is the check that carries the confidentiality. With 0700
+a non-root user cannot traverse in, which is what makes a 0644 fragment
+safe. Without it, 0644 exposes every user's network policy to every
+local user.
+
+Group-write on the file is rejected because the `authnft` group is
+exactly the set of users the module gates. A 0664 root:authnft fragment
+would let any gated user rewrite the rules another one receives at their
+next login, installed as root.
+
+A producer using a config-management tool must set the mode explicitly.
+Ansible's copy and template default to 0644, which passes, but they do
+not create the parent directory 0700. Failure is fail-closed: the
+session is denied and the reason is logged.
 
 The module does not signal producers on fragment reload; fragments are
 re-read on every open_session.
@@ -426,7 +451,8 @@ Security considerations:
     mode on the per-user fragment at /etc/authnft/users/<username>
     (see §4.1). It does NOT recurse into `include`d files. The admin
     is responsible for ensuring every transitively included file is
-    also root-owned and not world-writable. A root-owned user
+    also root-owned and not group- or world-writable, in a 0700
+    root:root directory. A root-owned user
     fragment that includes an attacker-controlled file gives the
     attacker control over the loaded ruleset.
 

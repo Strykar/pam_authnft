@@ -42,7 +42,7 @@ Untrusted or semi-trusted inputs, and where each is handled:
 |---|---|---|
 | `PAM_USER` | authenticated by the PAM service | validated against a strict username charset before any use |
 | `PAM_RHOST` | untrusted (network-supplied) | parsed as an IP literal, zone-stripped, policy-gated (`rhost_policy`); non-parseable values fall back to the cgroup-only set, never into command text |
-| Per-user fragment | trusted content, hostile placement | must be root-owned, not world-writable, checked with `stat(2)` before load; content passes a brace, quote and comment-aware statement scanner with verb and shared-chain guards |
+| Per-user fragment | trusted content, hostile placement | must be root-owned and not group- or world-writable, in a 0700 root:root directory, both checked with `stat(2)` before load; content passes a brace, quote and comment-aware statement scanner with verb and shared-chain guards |
 | Transitively included files | administrator's responsibility | documented limitation (README, ADMIN_GUIDE); an `include` in a fragment is logged at open |
 | `claims_env` keyring payload | untrusted bytes from an earlier PAM module | read from a UID-locked kernel key, sanitised to a printable-ASCII charset, embedded only as an nftables comment |
 | `NETLINK_SOCK_DIAG` responses | kernel-supplied | length-checked chunk parsing (fuzzed); only inbound ESTABLISHED sockets whose local port is a host listener qualify |

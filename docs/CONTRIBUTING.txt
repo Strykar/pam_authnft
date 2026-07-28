@@ -153,7 +153,8 @@ covers transitive resolution). Invariant #5's ownership check is
 applied only to the fragment itself — files pulled in transitively are
 NOT re-validated. pam_authnft logs a LOG_INFO on open when a fragment
 contains an `include` directive; administrators remain responsible for
-ensuring included files are root-owned and not world-writable.
+ensuring included files are root-owned, not group- or world-writable,
+and in a 0700 root:root directory.
 
 
 Seccomp allowlist
