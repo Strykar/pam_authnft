@@ -548,13 +548,26 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * Call 2: jump rule in the shared filter chain. ECHO + HANDLE flags
      * make libnftables print the committed rule with its kernel-assigned
      * handle, which we parse and store for cleanup.
+     *
+     * `insert`, not `add`. The site's default-deny lives outside the
+     * module and the admin can only place it after the jumps that exist
+     * when they place it. Appending put every later session behind it:
+     * the session authenticated, installed correct-looking rules, and
+     * passed no traffic, while an earlier session on the same host kept
+     * working. Inserting puts each jump at the head of the chain, so the
+     * deny stays last however many sessions open afterwards.
+     *
+     * Order among session jumps does not matter: each matches only its
+     * own cgroup and source, so at most one can fire for a given packet.
+     * Measured as E4 (appended, shadowed) against E6 (inserted, admitted)
+     * in tests/packet_flow_matrix.sh, with E5 and E7 as controls. #105.
      */
     nft_ctx_output_set_flags(ctx,
         NFT_CTX_OUTPUT_ECHO | NFT_CTX_OUTPUT_HANDLE);
     nft_ctx_buffer_output(ctx);
 
     snprintf(cmd, sizeof(cmd),
-             "add rule inet %s filter jump %s",
+             "insert rule inet %s filter jump %s",
              TABLE_NAME, sd->chain_name);
 
     DEBUG_PRINT("nft call 2 (jump rule):\n%s", cmd);
