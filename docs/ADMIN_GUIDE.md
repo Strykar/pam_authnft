@@ -258,7 +258,7 @@ later chain's drop.
 
 If your site policy has to live in its own table, that table must be
 taught to honour the module's decision rather than run a blanket drop
-after it. There is no mechanism for that in this release; track #105.
+after it. There is no mechanism for that in this release; track #114.
 
 **After a reboot** the `inet authnft` table does not exist until the
 first session opens, so a deny placed inside it does not survive. Re-apply
