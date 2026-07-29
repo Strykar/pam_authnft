@@ -1158,4 +1158,68 @@ fi
 pass "10.26: ct rule first, both jumps after it, site deny last (ct $CT_LINE, jumps $FIRST_JUMP_LINE-$LAST_JUMP_LINE, deny $DENY_LINE; appended control at $CTRL_LINE)"
 nft delete table inet authnft 2>/dev/null || true
 
+# 10.27: the session mark's lifecycle, through the real module (#103).
+#
+# Section I of `make test-packet-flow` proves what the gate does to packets,
+# but it builds the chain by hand. Whether pam_authnft itself issues an id,
+# tags its session chain with it, puts it in live_sessions, and takes it out
+# again at close is a claim about the module, so it is exercised through the
+# module. That distinction is why the first #108 probe reached the right
+# answer through the wrong instrument.
+printf "${YELLOW}10.27: session mark issued, tagged, and revoked at close (#103)${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+# Open only. The nftables state outlives pamtester, so the live session can
+# be inspected.
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.27: session did not open"
+fi
+
+LIVE_1027=$(nft list set inet authnft live_sessions 2>/dev/null \
+    | grep -oP 'elements = \{ \K[^}]*' | tr -d ' ')
+[[ -n "$LIVE_1027" ]] || { nft list table inet authnft >&2; \
+    fail "10.27: live_sessions is empty during an open session"; }
+
+# The id in the set must be the same one the session chain stamps on its
+# connections. If they diverge, the gate accepts flows nothing tagged, or
+# revokes an id no flow carries.
+TAG_1027=$(nft list table inet authnft 2>/dev/null \
+    | grep -oP 'ct mark set ct mark & 0x[0-9a-f]+ \| \K0x[0-9a-f]+')
+[[ -n "$TAG_1027" ]] || { nft list table inet authnft >&2; \
+    fail "10.27: no session chain tag rule"; }
+if [[ "$LIVE_1027" != "$TAG_1027" ]]; then
+    nft list table inet authnft >&2
+    fail "10.27: live_sessions holds $LIVE_1027 but the chain tags $TAG_1027"
+fi
+
+# The tag must leave the administrator's bits alone. A mask that clobbered
+# them would silently undo any ct-mark policy the site runs.
+MASK_1027=$(nft list table inet authnft 2>/dev/null \
+    | grep -oP 'ct mark set ct mark & \K0x[0-9a-f]+')
+case "$MASK_1027" in
+    0xff*) : ;;
+    *) fail "10.27: tag mask $MASK_1027 does not preserve the admin bits" ;;
+esac
+
+# A second session, opened and closed in one PAM handle so close_session
+# really runs. Its id must be gone afterwards while the first session's
+# remains: that is revocation, and it is not "the set was cleared".
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" \
+        open_session close_session >/dev/null 2>&1; then
+    fail "10.27: second session lifecycle failed"
+fi
+LIVE_AFTER=$(nft list set inet authnft live_sessions 2>/dev/null \
+    | grep -oP 'elements = \{ \K[^}]*' | tr -d ' ')
+if [[ "$LIVE_AFTER" != "$LIVE_1027" ]]; then
+    nft list table inet authnft >&2
+    fail "10.27: after close, live_sessions is '$LIVE_AFTER', expected only the still-open session's '$LIVE_1027'"
+fi
+
+pass "10.27: id $TAG_1027 tagged and live during the session; the second session's id was added and revoked at close (mask $MASK_1027 preserves admin bits)"
+nft delete table inet authnft 2>/dev/null || true
+
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

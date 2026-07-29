@@ -230,8 +230,7 @@ sudo nft add rule inet authnft filter tcp dport { 5432, 6379 } counter drop \
 ```
 
 Position within that chain does not matter. The module places each
-session's jump immediately after its `ct state established,related accept`
-rule, so every jump precedes your deny however many sessions open
+session's jump immediately after the shared established-accept gate, so every jump precedes your deny however many sessions open
 afterwards, and whether the deny was placed before or after any of them
 [E6, E8]. The ct rule stays first, so established traffic short-circuits
 there instead of walking every live session chain [E9]. Before this the module appended, and a session
@@ -295,7 +294,8 @@ table inet authnft {
 
     chain filter {
         type filter hook input priority filter - 1; policy accept;
-        ct state established,related accept
+        ct state established,related ct mark & 0x00ffffff == 0x00000000 accept
+        ct state established,related ct mark & 0x00ffffff == @live_sessions accept
         jump session_alice_1127936
     }
 
