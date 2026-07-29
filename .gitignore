@@ -6,6 +6,7 @@ test_nft_validator
 test_util_validators
 test_peer_lookup
 tests/include_walk_driver
+tests/test_session_mark
 tests/oracle/oracle_runner
 rules.tmp
 trace.log
