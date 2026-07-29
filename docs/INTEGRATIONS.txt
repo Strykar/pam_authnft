@@ -340,7 +340,8 @@ Both are scanned. Before the fix for issue #108 the scan covered only
 the top-level buffer while libnftables resolved includes at execution,
 so an included `flush ruleset` ran and the module reported success.
 Included files are now opened, permission-checked to the same bar as
-the top-level fragment (root-owned, not world-writable, regular file)
+the top-level fragment (root-owned, not group- or world-writable,
+regular file, in a 0700 root:root directory)
 and scanned, to a depth of 4 and a total of 16 files, with repeats and
 cycles rejected.
 
@@ -354,6 +355,30 @@ identity brokers) SHOULD:
     Validate the fragment with `nft -c -f <file>` before installing.
     Track generation provenance in a comment block for operator sanity.
 
+Permissions the module enforces at every open_session, on the fragment
+and on every file it includes:
+
+    the file           root-owned, and not writable by group or other.
+                       0644 and 0600 both pass; 0664 does not.
+    its directory      root-only, 0700 root:root. Nothing may be
+                       readable, writable or traversable by group or
+                       other.
+
+The directory is the check that carries the confidentiality. With 0700
+a non-root user cannot traverse in, which is what makes a 0644 fragment
+safe. Without it, 0644 exposes every user's network policy to every
+local user.
+
+Group-write on the file is rejected because the `authnft` group is
+exactly the set of users the module gates. A 0664 root:authnft fragment
+would let any gated user rewrite the rules another one receives at their
+next login, installed as root.
+
+A producer using a config-management tool must set the mode explicitly.
+Ansible's copy and template default to 0644, which passes, but they do
+not create the parent directory 0700. Failure is fail-closed: the
+session is denied and the reason is logged.
+
 The module does not signal producers on fragment reload; fragments are
 re-read on every open_session.
 
@@ -363,6 +388,22 @@ pam_authnft inserts session elements with a 1-day timeout as a safety
 net. Primary cleanup is close_session (which tears down the per-session
 chain, sets, and jump rule). Fragments MUST NOT insert their own
 elements into per-session sets; these are owned by pam_authnft.
+
+Cleanup is scoped to the objects the module named: the jump rule, the
+per-session chain, and the three per-session sets. Anything a fragment
+put outside that set is the administrator's to remove.
+
+That includes rules an included file adds to the shared `filter` chain,
+which §4.6 sanctions. Such a rule outlives every session, because
+close_session never had a handle on it, and it keeps acting on traffic
+for sessions that no longer exist. A shared-chain `drop` from an include
+therefore keeps dropping after the user who owned it has logged out.
+Pinned by cases G4 and G5 of `make test-packet-flow`.
+
+This is the module behaving as specified, not a leak, but it means a
+site that composes policy through includes needs its own answer for
+retiring those rules. The per-session chain is the place for anything
+that should die with the session.
 
 The nft transaction is three separate nft_run_cmd_from_buffer calls.
 If call (c) fails (e.g., a syntax error in the fragment), the
@@ -426,7 +467,8 @@ Security considerations:
     mode on the per-user fragment at /etc/authnft/users/<username>
     (see §4.1). It does NOT recurse into `include`d files. The admin
     is responsible for ensuring every transitively included file is
-    also root-owned and not world-writable. A root-owned user
+    also root-owned and not group- or world-writable, in a 0700
+    root:root directory. A root-owned user
     fragment that includes an attacker-controlled file gives the
     attacker control over the loaded ruleset.
 

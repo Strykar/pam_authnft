@@ -274,7 +274,8 @@ Trust model
 - The module runs with whatever privilege PAM grants the calling service
   (typically root). There is no privilege drop; instead, the attack
   surface is contained with seccomp-BPF.
-- Fragments must be root-owned and not world-writable. This is the same
+- Fragments must be root-owned and not group- or world-writable, and
+  must live in a 0700 root:root directory. This is the same
   model used by /etc/nftables.conf and sudoers includes. Administrators
   author fragments; users never do.
 - Non-members of the `authnft` group pass through without nftables

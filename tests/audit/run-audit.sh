@@ -29,6 +29,7 @@ getent group authnft >/dev/null || groupadd -r authnft
 id "$USER_AUDIT" >/dev/null 2>&1 || \
     useradd -r -s /usr/sbin/nologin -G authnft "$USER_AUDIT"
 mkdir -p /etc/authnft/users
+chmod 700 /etc/authnft /etc/authnft/users
 cat > /etc/authnft/users/"$USER_AUDIT" <<'NFT'
 add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
 NFT

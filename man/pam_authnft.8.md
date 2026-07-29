@@ -123,7 +123,8 @@ On session open, the module:
 8. Verifies the user is a member of the **authnft** group. Non-members
    pass through with **PAM_SUCCESS**.
 9. Validates the fragment at */etc/authnft/users/\<user\>*: must be
-   root-owned, not world-writable. Content validation rejects
+   root-owned, not group- or world-writable, in a 0700 root:root
+   directory. Content validation rejects
    disallowed verbs (*flush*, *delete*, *reset*, *list*, *rename*)
    and include paths outside */etc/authnft/*.
 10. Issues three libnftables calls:
@@ -167,7 +168,8 @@ libnftables echo-format regression).
     */etc/authnft/groups/*); libnftables resolves includes
     transitively. pam_authnft does not recurse ownership checks into
     included files — the admin MUST ensure every transitively
-    included file is also root-owned and not world-writable. When a
+    included file is also root-owned, not group- or world-writable,
+    and in a 0700 root:root directory. When a
     fragment contains an **include** directive, the module emits a
     **LOG_INFO** reminder about this responsibility. See
     **docs/INTEGRATIONS.txt** §4.6 for the composition pattern and

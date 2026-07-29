@@ -65,7 +65,8 @@ static void emit_reject_message(pam_handle_t *pamh, const char *user,
         break;
     case AUTHNFT_REJECT_FRAGMENT_PERMS:
         pam_error(pamh, "authnft: fragment %s must be root-owned and not "
-                  "world-writable.", path);
+                  "group- or world-writable, in a 0700 root:root directory.",
+                  path);
         break;
     case AUTHNFT_REJECT_FRAGMENT_UNREADABLE:
         pam_error(pamh, "authnft: fragment %s could not be read.", path);

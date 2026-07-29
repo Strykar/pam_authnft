@@ -78,6 +78,7 @@ else
 fi
 
 mkdir -p "$RULES_DIR"
+chmod 700 /etc/authnft "$RULES_DIR"
 
 # Runtime session-file directory. Normally created at boot by
 # /usr/lib/tmpfiles.d/authnft.conf; test harness creates it on demand so
@@ -1078,6 +1079,83 @@ EOF
         fi
     fi
 fi
+nft delete table inet authnft 2>/dev/null || true
+
+# 10.26: a session opened AFTER the site's default-deny is not shadowed by it.
+#
+# The module appended its jump rule until #105 was fixed, so any session
+# opened after an admin placed their deny landed behind it and was never
+# reached: authenticated fine, correct-looking rules, a moving counter, and
+# no traffic, while an earlier session on the same host kept working. The
+# fix is `insert` rather than `add`.
+#
+# tests/packet_flow_matrix.sh E4/E6 measure this on the wire with a
+# hand-built chain. This asserts the placement the REAL module produces,
+# through two real pamtester sessions with a real deny between them, and
+# carries its own falsifier so it cannot pass vacuously.
+printf "${YELLOW}10.26: session opened after the site deny is not shadowed (#105)${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+# Session one. open_session only: the nftables state is kernel state and
+# outlives pamtester, which is what lets a second session see it.
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.26: first session did not open"
+fi
+J1=$(nft list chain inet authnft filter 2>/dev/null | grep -c 'jump session_' || true)
+[[ "$J1" -eq 1 ]] || fail "10.26: expected 1 jump after the first session, found $J1"
+
+# The admin places the site's default-deny. They can only append, and they
+# can only do it after the jumps that exist right now.
+nft add rule inet authnft filter tcp dport 19399 counter drop comment '"site-deny-1026"' \
+    || fail "10.26: could not add the site deny"
+
+# Session two, opened after the deny is already in place.
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.26: second session did not open"
+fi
+J2=$(nft list chain inet authnft filter 2>/dev/null | grep -c 'jump session_' || true)
+[[ "$J2" -eq 2 ]] || fail "10.26: expected 2 jumps after the second session, found $J2"
+
+# The assertion: every jump precedes the deny. Line numbers within the
+# chain listing are the evaluation order.
+CHAIN_1026=$(nft list chain inet authnft filter 2>/dev/null)
+DENY_LINE=$(echo "$CHAIN_1026" | grep -n 'site-deny-1026' | cut -d: -f1)
+LAST_JUMP_LINE=$(echo "$CHAIN_1026" | grep -n 'jump session_' | tail -1 | cut -d: -f1)
+[[ -n "$DENY_LINE" && -n "$LAST_JUMP_LINE" ]] \
+    || fail "10.26: could not locate the deny or the jumps in the chain"
+if [[ "$LAST_JUMP_LINE" -gt "$DENY_LINE" ]]; then
+    echo "$CHAIN_1026" >&2
+    fail "10.26: a session jump landed AFTER the site deny (line $LAST_JUMP_LINE > $DENY_LINE) — shadowed"
+fi
+
+# Falsifier. If a rule appended to this same chain did NOT land after the
+# deny, the assertion above would be true for reasons having nothing to do
+# with `insert`, and the case would be worthless. Append one and prove the
+# chain really does put it last.
+nft add rule inet authnft filter tcp dport 19398 counter accept comment '"append-control-1026"' \
+    || fail "10.26: could not add the append control"
+CTRL_LINE=$(nft list chain inet authnft filter 2>/dev/null | grep -n 'append-control-1026' | cut -d: -f1)
+[[ -n "$CTRL_LINE" && "$CTRL_LINE" -gt "$DENY_LINE" ]] \
+    || fail "10.26: append control did not land after the deny — the ordering assertion is vacuous"
+
+# The other half of the placement: the ct rule stays first. If a jump ever
+# precedes it, every packet of every established flow walks every live
+# session chain before being accepted, a per-packet cost that grows with the
+# number of logged-in users. That is what plain `insert` did.
+CT_LINE=$(echo "$CHAIN_1026" | grep -n 'ct state established,related' | cut -d: -f1)
+FIRST_JUMP_LINE=$(echo "$CHAIN_1026" | grep -n 'jump session_' | head -1 | cut -d: -f1)
+[[ -n "$CT_LINE" && -n "$FIRST_JUMP_LINE" ]] \
+    || fail "10.26: could not locate the ct rule or the jumps"
+if [[ "$CT_LINE" -gt "$FIRST_JUMP_LINE" ]]; then
+    echo "$CHAIN_1026" >&2
+    fail "10.26: a session jump precedes the ct rule (line $FIRST_JUMP_LINE < $CT_LINE) — established traffic now walks every session chain"
+fi
+
+pass "10.26: ct rule first, both jumps after it, site deny last (ct $CT_LINE, jumps $FIRST_JUMP_LINE-$LAST_JUMP_LINE, deny $DENY_LINE; appended control at $CTRL_LINE)"
 nft delete table inet authnft 2>/dev/null || true
 
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

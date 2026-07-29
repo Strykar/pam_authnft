@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <grp.h>
 #include <pwd.h>
@@ -94,6 +95,76 @@ static char *read_file(const char *path, size_t *out_len) {
 #define INC_MAX_FILES 16
 #define INC_PATH_MAX  256
 
+/*
+ * The directory a fragment or an included file lives in must be root-only.
+ *
+ * This is the check that carries the confidentiality, not the file mode.
+ * With a 0700 directory a non-root user cannot traverse in, so a 0644
+ * fragment is unreachable; without it, 0644 exposes every user's network
+ * policy to every local user, and the file mode is the only thing left
+ * standing. examples_generator.sh has emitted `chmod 700` here since the
+ * beginning and called it "root-owned, not world-readable", `make install`
+ * left it 0755, the docs never stated it as a requirement, and nothing
+ * verified it. All four now agree.
+ */
+static int check_dir_root_only(pam_handle_t *pamh, const char *file_path)
+{
+    char dir[PATH_MAX];
+    const char *slash = strrchr(file_path, '/');
+    struct stat ds;
+
+    if (!slash || slash == file_path) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot derive directory of %s", file_path);
+        return -1;
+    }
+    size_t n = (size_t)(slash - file_path);
+    if (n >= sizeof(dir)) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: directory path too long for %s", file_path);
+        return -1;
+    }
+    memcpy(dir, file_path, n);
+    dir[n] = '\0';
+
+    if (stat(dir, &ds) != 0) {
+        pam_syslog(pamh, LOG_ERR, "authnft: cannot stat %s", dir);
+        return -1;
+    }
+    if (ds.st_uid != 0 || (ds.st_mode & (S_IRWXG | S_IRWXO))) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: %s must be root-only (want 0700 root:root, "
+                   "have %04o uid=%d)",
+                   dir, ds.st_mode & 07777, ds.st_uid);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Permission bar for a fragment or an included file: root-owned, and not
+ * writable by group or other.
+ *
+ * Group-write is the one that matters. `authnft` is exactly the set of
+ * users the module gates, so a 0664 root:authnft fragment lets any gated
+ * user rewrite any other's rules and have them installed as root at the
+ * next session open. Nothing legitimate needs it, so rejecting it costs
+ * nothing; 0644 stays valid, which is what INTEGRATIONS.txt §4.4 tells
+ * producers to write.
+ */
+static int check_file_perms(pam_handle_t *pamh, const char *path,
+                            const struct stat *fs)
+{
+    if (fs->st_uid != 0 || (fs->st_mode & (S_IWGRP | S_IWOTH))) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: insecure permissions on %s (uid=%d mode=%04o); "
+                   "must be root-owned and not group- or world-writable",
+                   path, fs->st_uid, fs->st_mode & 07777);
+        return -1;
+    }
+    return 0;
+}
+
 struct include_walk {
     pam_handle_t *pamh;
     int depth;
@@ -148,12 +219,9 @@ static int validate_include(void *ctx, const char *inc_path) {
                    "authnft: include %s is not a regular file", inc_path);
         return -1;
     }
-    if (ist.st_uid != 0 || (ist.st_mode & S_IWOTH)) {
-        pam_syslog(w->pamh, LOG_ERR,
-                   "authnft: insecure permissions on include %s "
-                   "(uid=%d mode=%o)", inc_path, ist.st_uid, ist.st_mode);
+    if (check_file_perms(w->pamh, inc_path, &ist) < 0 ||
+        check_dir_root_only(w->pamh, inc_path) < 0)
         return -1;
-    }
 
     size_t ilen = 0;
     char *ibuf = read_file(inc_path, &ilen);
@@ -187,6 +255,42 @@ int authnft_validate_fragment_includes(pam_handle_t *pamh, const char *path,
                                     validate_include, &iw);
 }
 
+
+/*
+ * Handle of the shared chain's ct accept rule, or 0 if it cannot be read.
+ *
+ * The session jump is placed immediately after this rule rather than at the
+ * head of the chain. Both keep every jump ahead of a site deny appended
+ * later, which is what #105 needs. Only this one leaves the
+ * established-accept first: with jumps at the head, every packet of every
+ * established flow walks every live session chain before reaching it, a
+ * per-packet cost that grows with the number of logged-in users. Measured
+ * at three sessions: each chain counted 15 packets of a single unsessioned
+ * flow that the ct rule then accepted 14 times.
+ */
+static uint64_t ct_rule_handle(struct nft_ctx *ctx) {
+    nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_HANDLE);
+    nft_ctx_buffer_output(ctx);
+    int rc = nft_run_cmd_from_buffer(ctx,
+        "list chain inet " TABLE_NAME " filter");
+    const char *out = nft_ctx_get_output_buffer(ctx);
+    uint64_t handle = 0;
+
+    if (rc == 0 && out) {
+        const char *line = strstr(out, "ct state established,related");
+        if (line) {
+            /* Bound the search to this rule's line: an unhandled ct rule
+             * would otherwise pick up the next rule's handle. */
+            const char *eol = strchr(line, '\n');
+            const char *hp = strstr(line, "# handle ");
+            if (hp && (!eol || hp < eol))
+                handle = strtoull(hp + 9, NULL, 10);
+        }
+    }
+    nft_ctx_unbuffer_output(ctx);
+    nft_ctx_output_set_flags(ctx, 0);
+    return handle;
+}
 
 /*
  * Best-effort rollback of partial nft state created by nft_handler_setup
@@ -292,7 +396,8 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * rather than lingering in the sshd monitor that owns the transient scope.
      * A non-member never reaches this function. */
 
-    /* Fragment validation: must exist, be root-owned, and not world-writable. */
+    /* Fragment validation: must exist, clear the permission bar, and sit
+     * in a root-only directory. See check_file_perms/check_dir_root_only. */
     snprintf(user_conf_path, sizeof(user_conf_path), "%s/%s", RULES_DIR, user);
     DEBUG_PRINT("loading fragment: %s", user_conf_path);
 
@@ -304,10 +409,8 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         return PAM_AUTH_ERR;
     }
 
-    if (st.st_uid != 0 || (st.st_mode & S_IWOTH)) {
-        (void)pam_syslog(pamh, LOG_ERR,
-                         "authnft: insecure permissions on %s (uid=%d mode=%o)",
-                         user_conf_path, st.st_uid, st.st_mode);
+    if (check_file_perms(pamh, user_conf_path, &st) < 0 ||
+        check_dir_root_only(pamh, user_conf_path) < 0) {
         authnft_audit_fragment_reject(user, "perms", user_conf_path);
         if (reason) *reason = AUTHNFT_REJECT_FRAGMENT_PERMS;
         return PAM_AUTH_ERR;
@@ -481,14 +584,48 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * Call 2: jump rule in the shared filter chain. ECHO + HANDLE flags
      * make libnftables print the committed rule with its kernel-assigned
      * handle, which we parse and store for cleanup.
+     *
+     * Positioned after the ct rule, not appended. The site's default-deny
+     * lives outside the module and the admin can only place it after the
+     * jumps that exist when they place it. Appending put every later
+     * session behind it: the session authenticated, installed
+     * correct-looking rules, and passed no traffic, while an earlier
+     * session on the same host kept working.
+     *
+     * Order among session jumps does not matter: each matches only its
+     * own cgroup and source, so at most one can fire for a given packet.
+     * What does matter is that the ct rule stays first, so established
+     * traffic short-circuits before walking any session chain.
+     *
+     * Measured as E4 (appended, shadowed) against E6 (admitted), with E5
+     * and E7 as controls, plus E8 for a deny that predates every session,
+     * in tests/packet_flow_matrix.sh. #105.
      */
+    /* Read the handle before switching the context into echo mode for call
+     * 2: ct_rule_handle drives its own buffering and flags, and doing that
+     * inside call 2's setup tears down the echo output the jump-handle
+     * parse below depends on. */
+    uint64_t cth = ct_rule_handle(ctx);
+
     nft_ctx_output_set_flags(ctx,
         NFT_CTX_OUTPUT_ECHO | NFT_CTX_OUTPUT_HANDLE);
     nft_ctx_buffer_output(ctx);
 
-    snprintf(cmd, sizeof(cmd),
-             "add rule inet %s filter jump %s",
-             TABLE_NAME, sd->chain_name);
+    if (cth) {
+        snprintf(cmd, sizeof(cmd),
+                 "add rule inet %s filter position %" PRIu64 " jump %s",
+                 TABLE_NAME, cth, sd->chain_name);
+    } else {
+        /* Fall back to the head of the chain. Still ahead of any site deny,
+         * so #105 stays fixed; it only costs the established fast path. A
+         * slower correct order beats a denied login. */
+        pam_syslog(pamh, LOG_WARNING,
+                   "authnft: could not read the ct rule handle; placing the "
+                   "jump at the head of the shared chain");
+        snprintf(cmd, sizeof(cmd),
+                 "insert rule inet %s filter jump %s",
+                 TABLE_NAME, sd->chain_name);
+    }
 
     DEBUG_PRINT("nft call 2 (jump rule):\n%s", cmd);
     if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {

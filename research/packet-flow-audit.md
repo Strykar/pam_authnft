@@ -2,7 +2,7 @@
 
 Run: `sudo make test-packet-flow` (harness: `tests/packet_flow_matrix.sh`).
 Captured run and `nft monitor trace` output: `research/packet-flow-testbed/`.
-Kernel 7.1.5-arch1-1, 23 cases, every one matched its expected verdict.
+Kernel 7.1.5-arch1-1, 35 cases, every one matched its expected verdict.
 
 Why this exists: the suite had ten packet-level assertions and not one of
 them ever watched a packet be denied. Every existing test builds a
@@ -38,6 +38,12 @@ key is a cgroup path.
     E1     PASS     PASS     deny appended to the shared chain AFTER the jump
     E2     BLOCK    BLOCK    deny added BEFORE the jump: session chain shadowed
     E3     BLOCK    BLOCK    site deny as a separate base chain at priority filter
+    E4     BLOCK    BLOCK    session opened after the site deny: its jump is shadowed
+    E5     PASS     PASS     the session that predates the deny still works (E4 control)
+    E6     PASS     PASS     same session, jump positioned after the ct rule (#105 fix)
+    E7     BLOCK    BLOCK    deny still denies with the jump positioned (E6 control)
+    E8     PASS     PASS     deny placed BEFORE any session, jump positioned after the ct rule
+    E9     PASS     PASS     established traffic short-circuits at the ct rule, never entering a session chain
     F1     PASS     PASS     fragment allow rule, no site deny in play
     F2     BLOCK    BLOCK    fragment deny rule inside the session chain
     F3     PASS     PASS     fragment deny does not outlive the session
@@ -46,6 +52,12 @@ key is a cgroup path.
     G3     PASS     PASS     chain a fragment created survives close (INTEGRATIONS 4.5)
     G4     PASS     PASS     rule a fragment put in the shared chain survives close
     G5     BLOCK    BLOCK    leftover shared-chain fragment rule still drops after close
+    I1     PASS     PASS     session flow admitted while the session is live (control)
+    I2     BLOCK    BLOCK    flow admitted during the session, after close (D1 fixed)
+    I3     PASS     PASS     untagged flow survives the same close (the SSH connection)
+    I4     PASS     PASS     reusing a session id resurrects the revoked flow (why ids must not repeat)
+    I5     BLOCK    BLOCK    a fresh id does not resurrect it (I4 control)
+    I6     PASS     PASS     the session tag preserved the admin's mark bits (0xab000001, admin slice 0xab000000)
 ```
 
 Negative cases carry arrival controls: the deny counters have to move, so a
@@ -115,9 +127,12 @@ What it does not control, and cannot:
   returns nothing. A ctnetlink flush does revoke it (D3), which is what
   authpf does and what #103 proposes.
 - **Whether an accept is final.** Any base chain at a higher priority number
-  on the same hook can overrule it (E3), and any earlier terminal rule in
-  the shared chain can prevent the session chain from ever running (E2).
-  The module has no way to detect either arrangement.
+  on the same hook can overrule it (E3), and the module has no way to detect
+  that arrangement. An earlier terminal rule in the shared chain used to
+  prevent the session chain from running (E2); it no longer can, because the
+  jump is now placed immediately after the ct rule rather than appended, so
+  it precedes any deny whenever that deny was added (E6, E8). The ct rule
+  stays first, so established traffic does not walk the session chains (E9).
 - **Traffic conntrack never saw the start of.** The ct rule carries
   pre-session flows only when conntrack was already tracking them (C1
   versus C3). It is not a retroactive rescue.
@@ -163,44 +178,52 @@ Two structural notes for future harnesses:
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | Established flows outlive close_session (D1) | issue #103, docs corrected, pinned by D1/D2/D3 |
-| 2 | Two of three site-deny placements silently defeat the module (E2, E3) | issue #105, pinned by E1/E2/E3 |
-| 3 | The ct rule does not rescue a flow conntrack was not already tracking (C3) | undocumented precondition, pinned by C1/C2/C3, no issue filed yet |
+| 1 | Established flows outlive close_session (D1) | issue #103, docs corrected, pinned by D1/D2/D3; the proposed ct mark gate measured by I1-I6, not yet implemented |
+| 2 | Two of three site-deny placements silently defeat the module (E2, E3) | issue #105; the ordering half fixed by `0327f21`, pinned by E4-E9 and integration 10.26. E3 remains, unfixable by rule order |
+| 3 | The ct rule does not rescue a flow conntrack was not already tracking (C3) | issue #111, precondition documented in ARCHITECTURE.txt, pinned by C1/C2/C3 |
 | 4 | ARCHITECTURE.txt cites 10.12 as validating Class B survival; 10.12 validates the negative half only | corrected to cite C1/C2 |
-| 5 | A rule in the shared chain outlives every session and keeps denying (G4, G5) | reachable only through `include`, see finding 6; pinned |
-| 6 | Fragment content validation stops at the `include` boundary | not filed, security-adjacent, see below |
+| 5 | A rule an included fragment adds to the shared chain outlives every session and keeps denying (G4, G5) | working as designed (INTEGRATIONS 4.5/4.6); pinned by G4/G5 |
 
-### Finding 6, in detail
+Finding 5 is a persistence property, not a bypass. An included file is
+allowed to add rules to the shared chain (INTEGRATIONS 4.6, and
+`NFT_FRAG_INCLUDED` drops the shared-chain guard for exactly this). Such a
+rule lives outside the per-session chain, so close_session never had a handle
+on it and it persists (INTEGRATIONS 4.5 already documents that fragment
+objects outside the session chain are not cleaned up). G4/G5 pin the wire
+consequence: the leftover rule keeps dropping traffic after the session ends.
+INTEGRATIONS 4.5 now says so directly: rules an included file adds to the
+shared chain outlive every session and keep acting on traffic, and retiring
+them is the site's job.
 
-`check_statement` in `src/nft_validator.c` rejects two things in a fragment:
-a denylisted verb (`flush`, `delete`, `destroy`, `reset`, ...) and any
-`add rule inet authnft filter ...` targeting the shared chain.
-`validate_fragment_buf` only ever scans the bytes of the top-level fragment.
-libnftables resolves `include` directives later, at execution, so nothing an
-included file contains is scanned by either guard. INTEGRATIONS 4.6
-recommends the include pattern as the way to compose shared policy, and its
-worked example puts rules in the shared chain from an included file.
+### Correction: real finding, wrong instrument (issue #108)
 
-Both halves measured in a netns:
+The include-boundary finding was real. At the time it was found,
+`nft_handler_setup` called plain `validate_fragment_buf` on the top-level
+fragment only (no include recursion), so an included `flush ruleset` passed
+validation and libnftables executed it at commit time. Confirmed against the
+code that shipped before the fix: `git show 5baef33^:src/nft_handler.c` calls
+`validate_fragment_buf(pamh, user_conf_path, ...)` with no include callback.
 
+What was wrong was the evidence, not the conclusion. The probe ran raw
+`nft -f` in a bare netns, which has no pam_authnft in front of it, so it
+demonstrated libnftables' own include resolution, not the module's
+validation. Correct answer, wrong instrument: had the module already
+validated includes, that same probe would have been a false positive, and
+the only reason it was not is that the module happened to have the bug. A
+claim about what the module does has to be exercised through the module.
+
+Fixed by `5baef33` (issue #108): `nft_handler_setup` now calls
+`authnft_validate_fragment_includes`, which walks every `include` with
+`validate_include`, stats each file (uid 0, not world-writable, regular file,
+the bar the top-level fragment already clears), reads it, and re-runs the
+verb scan on its contents, with cycle detection and depth/file caps. Verified
+through the real module path by `make test-include-walk` (8 cases, all pass),
+including the exact case first seen through the bad probe:
+
+```text
+included flush ruleset                  -> rejected (rc=-1)
+bad verb three includes deep            -> rejected (rc=-1)
+self-referential include                -> rejected (rc=-1)
+world-writable / non-root-owned include -> rejected (rc=-1)
+included shared-chain rule (4.6)        -> accepted (rc=0), by design
 ```
-included "add rule inet authnft filter ... drop"  -> lands in the shared chain
-included "flush ruleset"                          -> accepted and executed,
-                                                     ruleset went 5 lines -> 0
-```
-
-A rule placed there survives every session (G4), keeps denying traffic for
-sessions that no longer exist (G5), and shadows every jump rule appended
-after it (E2), so it is also a way to silently disable the module.
-
-Reachability: the module checks ownership and mode on the top-level fragment
-only. Keeping included files root-owned is documented as the administrator's
-job (README, ADMIN_GUIDE), so an admin who follows the convention has no
-attacker path here. Where the convention is not followed, an included file
-that a non-root user can write turns into arbitrary root-executed nftables
-commands at the next session open, and the verb denylist that exists to stop
-exactly that does not apply. The gap is that the docs present the verb scan
-as a property of fragments without saying it stops at the include boundary.
-
-Not filed as a public issue: it describes how to get around a security
-control, and SECURITY.md routes that to a private advisory.

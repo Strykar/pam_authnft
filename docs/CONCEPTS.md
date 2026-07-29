@@ -176,6 +176,28 @@ needs a conntrack flush, which is what authpf does at logout and what
 issue #103 tracks. Cases D1 to D3 of `make test-packet-flow` pin the
 behaviour as it stands.
 
+The module only ever adds `accept` rules, so it grants; it never denies.
+Whatever denies is the site's, and it has to sit somewhere the module's
+accepts can win. Two arrangements, one that works and one that does not,
+both measured in `make test-packet-flow`.
+
+A deny inside the module's own `filter` chain works, wherever in that
+chain it sits. Each session's jump goes immediately after the shared
+`ct state established,related accept` rule rather than at the end, so every
+jump precedes the deny no matter how many sessions open after it was placed
+[E6, E8], while established traffic still short-circuits at the ct rule
+without entering any session chain [E9]. Appending was the earlier behaviour
+and it meant a session opened after the deny was never reached at all,
+while an earlier session on the same host kept working [E4, E5].
+
+A deny in a separate base chain does not work, at any priority [E3]. In
+netfilter, `accept` ends the chain it fires in, not the hook: the packet
+goes on to the next base chain, and a drop policy there kills it. The
+module's counter records the accept and the connection dies anyway. A
+module that only accepts cannot override a later chain's drop, so this is
+not something rule ordering can fix. See the deployment contract in
+[ADMIN_GUIDE.md](ADMIN_GUIDE.md) for what to do instead.
+
 On session open:
 
 1. Normalises `PAM_RHOST`: IPv4/IPv6 literals pass through, zone suffixes
