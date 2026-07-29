@@ -91,6 +91,23 @@ static char *read_file(const char *path, size_t *out_len) {
  * the include-path rules but drops the shared-chain guard, because
  * INTEGRATIONS.txt §4.6 makes the shared chain their documented target.
  */
+/* Rule comments identify the gate in `nft list` output and give the probe
+ * something to match that the rule text alone cannot: both gate arms share
+ * the ct-state prefix with the unconditional rule they replaced. */
+#define GATE_UNSESSIONED_COMMENT "authnft-est-unsessioned"
+#define GATE_LIVE_COMMENT        "authnft-est-live"
+
+/* nftables takes these as literals, so they are spelled rather than
+ * computed. Kept beside AUTHNFT_MARK_MASK/ADMIN in authnft.h by the
+ * build-time assertion below. */
+#define AUTHNFT_MARK_MASK_STR  "0x00ffffff"
+#define AUTHNFT_MARK_ADMIN_STR "0xff000000"
+
+_Static_assert(AUTHNFT_MARK_MASK == 0x00ffffffu,
+               "AUTHNFT_MARK_MASK_STR is out of step with AUTHNFT_MARK_MASK");
+_Static_assert(AUTHNFT_MARK_ADMIN == 0xff000000u,
+               "AUTHNFT_MARK_ADMIN_STR is out of step with AUTHNFT_MARK_ADMIN");
+
 #define INC_MAX_DEPTH 4
 #define INC_MAX_FILES 16
 #define INC_PATH_MAX  256
@@ -277,7 +294,12 @@ static uint64_t ct_rule_handle(struct nft_ctx *ctx) {
     uint64_t handle = 0;
 
     if (rc == 0 && out) {
-        const char *line = strstr(out, "ct state established,related");
+        /* Anchor on the live arm specifically: it is the second of the two
+         * gate rules, so positioning after it puts the jump after both.
+         * Matching the shared ct-state prefix would find the first arm and
+         * wedge every session jump between them. */
+        const char *line = strstr(out, GATE_LIVE_COMMENT);
+        if (!line) line = strstr(out, "ct state established,related");
         if (line) {
             /* Bound the search to this rule's line: an unhandled ct rule
              * would otherwise pick up the next rule's handle. */
@@ -313,6 +335,20 @@ static void nft_partial_cleanup(struct nft_ctx *ctx,
         snprintf(cmd, sizeof(cmd),
                  "delete rule inet %s filter handle %" PRIu64,
                  TABLE_NAME, sd->jump_handle);
+        (void)nft_run_cmd_from_buffer(ctx, cmd);
+    }
+
+    /* Call 1 put the id in live_sessions, so a failure after it leaves the
+     * element behind. Nothing carries the id, since the session never got
+     * its jump rule and ids are never reused, so this is a leak rather than
+     * a hole. Without it the set grows by one per failed session for the
+     * life of the boot. Its own transaction: the batch below is discarded
+     * wholesale when an object is missing, and bundling this in would tie
+     * the element's removal to theirs. */
+    if (sd->session_mark) {
+        snprintf(cmd, sizeof(cmd),
+                 "delete element inet %s live_sessions { 0x%08x }",
+                 TABLE_NAME, sd->session_mark);
         (void)nft_run_cmd_from_buffer(ctx, cmd);
     }
 
@@ -446,6 +482,14 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     int is_v6 = !cg_only && (strchr(remote_ip, ':') != NULL);
     const char *set_name = cg_only ? sd->set_cg : (is_v6 ? sd->set_v6 : sd->set_v4);
 
+    /* The id is allocated by the caller, before the seccomp filter goes on:
+     * the counter needs syscalls the setup allowlist does not carry. */
+    if (sd->session_mark == 0) {
+        pam_syslog(pamh, LOG_ERR, "authnft: no session mark for %s", user);
+        free(frag_buf);
+        return PAM_SESSION_ERR;
+    }
+
     ctx = nft_ctx_new(NFT_CTX_DEFAULT);
     if (!ctx) {
         free(frag_buf);
@@ -467,17 +511,72 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * harmless (first rule matches, rest skipped). Net effect: chain
      * size stays O(concurrent-burst-size) instead of O(total-sessions).
      */
+    nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_HANDLE);
     nft_ctx_buffer_output(ctx);
     int probe_rc = nft_run_cmd_from_buffer(ctx,
         "list chain inet " TABLE_NAME " filter");
     const char *probe_out = nft_ctx_get_output_buffer(ctx);
-    int ct_rule_present = (probe_rc == 0 && probe_out &&
-        strstr(probe_out, "ct state established,related accept") != NULL);
-    nft_ctx_unbuffer_output(ctx);
+    int gate_present = (probe_rc == 0 && probe_out &&
+        strstr(probe_out, GATE_LIVE_COMMENT) != NULL);
 
-    const char *ct_rule_line = ct_rule_present
+    /*
+     * An unconditional `ct state established,related accept` defeats
+     * revocation outright: it fires before the gate can consult
+     * live_sessions, so a closed session's flows keep passing. The module
+     * shipped exactly that rule before this change, so a host upgraded
+     * mid-boot still has one in the chain. Find it and delete it.
+     *
+     * Matched by absence of "ct mark": the gate rules carry the same
+     * ct-state prefix, so a substring test on the prefix alone would also
+     * match them and delete the gate instead.
+     */
+    uint64_t legacy_handle = 0;
+    if (probe_rc == 0 && probe_out) {
+        const char *line = probe_out;
+        while ((line = strstr(line, "ct state established,related")) != NULL) {
+            const char *eol = strchr(line, '\n');
+            size_t len = eol ? (size_t)(eol - line) : strlen(line);
+            if (!memmem(line, len, "ct mark", 7)) {
+                const char *hp = memmem(line, len, "# handle ", 9);
+                if (hp) legacy_handle = strtoull(hp + 9, NULL, 10);
+                break;
+            }
+            line = eol ? eol + 1 : line + len;
+        }
+    }
+    nft_ctx_unbuffer_output(ctx);
+    nft_ctx_output_set_flags(ctx, 0);
+
+    char legacy_line[96] = "";
+    if (legacy_handle) {
+        pam_syslog(pamh, LOG_WARNING,
+                   "authnft: removing an unconditional established-accept "
+                   "(handle %" PRIu64 ") that would defeat session revocation",
+                   legacy_handle);
+        snprintf(legacy_line, sizeof(legacy_line),
+                 "delete rule inet " TABLE_NAME " filter handle %" PRIu64 "\n",
+                 legacy_handle);
+    }
+
+    /*
+     * The gate. Untagged flows accept unconditionally: that is the SSH
+     * connection and everything else the module does not govern. Tagged
+     * flows accept only while their id is still in live_sessions, so close
+     * revoking the element revokes the flow.
+     *
+     * Both arms mask before comparing. Testing against a bare 0 would treat
+     * any flow an administrator's own rule had marked as unsessioned and
+     * hand it a free accept (I6).
+     */
+    const char *ct_rule_line = gate_present
         ? ""
-        : "add rule inet " TABLE_NAME " filter ct state established,related accept\n";
+        : "add set inet " TABLE_NAME " live_sessions { type mark; }\n"
+          "add rule inet " TABLE_NAME " filter ct state established,related "
+          "ct mark and " AUTHNFT_MARK_MASK_STR " 0x0 accept comment \""
+          GATE_UNSESSIONED_COMMENT "\"\n"
+          "add rule inet " TABLE_NAME " filter ct state established,related "
+          "ct mark and " AUTHNFT_MARK_MASK_STR " @live_sessions accept comment \""
+          GATE_LIVE_COMMENT "\"\n";
 
     /*
      * Call 1: infrastructure + per-session chain/sets + element.
@@ -493,16 +592,23 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         result = snprintf(cmd, sizeof(cmd),
                   "add table inet %s\n"
                   "add chain inet %s filter { type filter hook input priority filter - 1; policy accept; }\n"
-                  "%s"
+                  "add set inet %s live_sessions { type mark; }\n"
+                  "%s%s"
                   "add chain inet %s %s\n"
+                  "add rule inet %s %s ct state new ct mark set ct mark and "
+                  AUTHNFT_MARK_ADMIN_STR " or 0x%08x\n"
+                  "add element inet %s live_sessions { 0x%08x }\n"
                   "add set inet %s %s { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }\n"
                   "add set inet %s %s { typeof socket cgroupv2 level 2 . ip6 saddr; flags timeout; }\n"
                   "add set inet %s %s { typeof socket cgroupv2 level 2; flags timeout; }\n"
                   "add element inet %s %s { \"%s\" timeout 1d comment \"%s (PID:%d)%s\" }",
                   TABLE_NAME,
                   TABLE_NAME,
-                  ct_rule_line,
+                  TABLE_NAME,
+                  legacy_line, ct_rule_line,
                   TABLE_NAME, sd->chain_name,
+                  TABLE_NAME, sd->chain_name, sd->session_mark,
+                  TABLE_NAME, sd->session_mark,
                   TABLE_NAME, sd->set_v4,
                   TABLE_NAME, sd->set_v6,
                   TABLE_NAME, sd->set_cg,
@@ -511,16 +617,23 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         result = snprintf(cmd, sizeof(cmd),
                   "add table inet %s\n"
                   "add chain inet %s filter { type filter hook input priority filter - 1; policy accept; }\n"
-                  "%s"
+                  "add set inet %s live_sessions { type mark; }\n"
+                  "%s%s"
                   "add chain inet %s %s\n"
+                  "add rule inet %s %s ct state new ct mark set ct mark and "
+                  AUTHNFT_MARK_ADMIN_STR " or 0x%08x\n"
+                  "add element inet %s live_sessions { 0x%08x }\n"
                   "add set inet %s %s { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }\n"
                   "add set inet %s %s { typeof socket cgroupv2 level 2 . ip6 saddr; flags timeout; }\n"
                   "add set inet %s %s { typeof socket cgroupv2 level 2; flags timeout; }\n"
                   "add element inet %s %s { \"%s\" . %s timeout 1d comment \"%s (PID:%d)%s\" }",
                   TABLE_NAME,
                   TABLE_NAME,
-                  ct_rule_line,
+                  TABLE_NAME,
+                  legacy_line, ct_rule_line,
                   TABLE_NAME, sd->chain_name,
+                  TABLE_NAME, sd->chain_name, sd->session_mark,
+                  TABLE_NAME, sd->session_mark,
                   TABLE_NAME, sd->set_v4,
                   TABLE_NAME, sd->set_v6,
                   TABLE_NAME, sd->set_cg,
@@ -755,6 +868,30 @@ int nft_handler_cleanup(pam_handle_t *pamh, const char *user,
 
     ctx = nft_ctx_new(NFT_CTX_DEFAULT);
     if (!ctx) return PAM_SESSION_ERR;
+
+    /*
+     * Revocation first, in its own transaction. This is the only part of
+     * close that affects traffic already flowing: dropping the id from
+     * live_sessions makes the gate stop accepting the session's established
+     * flows on their next packet. Everything below is housekeeping, and
+     * bundling the two would mean a housekeeping failure leaves the flows
+     * admitted. Skipped when no id was allocated, because deleting an
+     * absent element fails the whole transaction.
+     */
+    if (sd->session_mark) {
+        char revoke[128];
+        snprintf(revoke, sizeof(revoke),
+                 "delete element inet %s live_sessions { 0x%08x }",
+                 TABLE_NAME, sd->session_mark);
+        if (nft_run_cmd_from_buffer(ctx, revoke) != 0) {
+            pam_syslog(pamh, LOG_WARNING,
+                       "authnft: could not revoke session mark 0x%08x for %s: "
+                       "%s", sd->session_mark, user,
+                       nft_ctx_get_error_buffer(ctx));
+        } else {
+            DEBUG_PRINT("revoked session mark 0x%08x", sd->session_mark);
+        }
+    }
 
     /*
      * Fast path: tear down the whole per-session state in one transaction,

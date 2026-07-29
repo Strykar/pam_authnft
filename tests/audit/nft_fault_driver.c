@@ -71,6 +71,13 @@ static void fill_max(char *dst, size_t cap, char c)
 static void baseline_session(authnft_session_t *sd)
 {
     memset(sd, 0, sizeof(*sd));
+    /* nft_handler_setup requires an id already allocated: the real caller
+     * does it in the setup child before seccomp goes on, because the
+     * counter needs syscalls the allowlist does not carry. This driver
+     * calls setup directly and unsandboxed, so it allocates here. A
+     * hardcoded value would do for the fault paths, but going through the
+     * allocator keeps the driver exercising the same contract. */
+    sd->session_mark = session_mark_alloc(NULL);
     snprintf(sd->cg_path, sizeof(sd->cg_path),
              "authnft.slice/authnft-audit.scope");
     snprintf(sd->chain_name, sizeof(sd->chain_name), "session_audit_1");

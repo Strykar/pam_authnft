@@ -32,7 +32,8 @@
 #include <unistd.h>
 
 #define SESSION_DIR  "/run/authnft/sessions"
-#define MARK_COUNTER "/run/authnft/session-mark-counter"
+#define RUN_DIR      "/run/authnft"
+#define MARK_COUNTER RUN_DIR "/session-mark-counter"
 #define PATH_MAX_LEN 256
 #define JSON_MAX     1024
 
@@ -54,6 +55,18 @@ uint32_t session_mark_alloc(pam_handle_t *pamh) {
     uint32_t cur = 0, next;
     int fd, len;
     ssize_t n;
+
+    /* tmpfiles.d creates /run/authnft at boot, but the module can be
+     * installed and a session opened before that has run. The session
+     * identity file treats a missing directory as a warning and carries on,
+     * because it is observability. This is not: without the counter no id
+     * can be issued and every session is denied. Create it rather than
+     * fail on an install-order accident. Mode matches data/authnft.tmpfiles. */
+    if (mkdir(RUN_DIR, 0755) != 0 && errno != EEXIST) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot create %s: %s", RUN_DIR, strerror(errno));
+        return 0;
+    }
 
     fd = open(MARK_COUNTER, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0) {
