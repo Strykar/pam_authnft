@@ -1142,7 +1142,20 @@ CTRL_LINE=$(nft list chain inet authnft filter 2>/dev/null | grep -n 'append-con
 [[ -n "$CTRL_LINE" && "$CTRL_LINE" -gt "$DENY_LINE" ]] \
     || fail "10.26: append control did not land after the deny — the ordering assertion is vacuous"
 
-pass "10.26: both session jumps precede the site deny (deny line $DENY_LINE, last jump $LAST_JUMP_LINE; appended control landed at $CTRL_LINE)"
+# The other half of the placement: the ct rule stays first. If a jump ever
+# precedes it, every packet of every established flow walks every live
+# session chain before being accepted, a per-packet cost that grows with the
+# number of logged-in users. That is what plain `insert` did.
+CT_LINE=$(echo "$CHAIN_1026" | grep -n 'ct state established,related' | cut -d: -f1)
+FIRST_JUMP_LINE=$(echo "$CHAIN_1026" | grep -n 'jump session_' | head -1 | cut -d: -f1)
+[[ -n "$CT_LINE" && -n "$FIRST_JUMP_LINE" ]] \
+    || fail "10.26: could not locate the ct rule or the jumps"
+if [[ "$CT_LINE" -gt "$FIRST_JUMP_LINE" ]]; then
+    echo "$CHAIN_1026" >&2
+    fail "10.26: a session jump precedes the ct rule (line $FIRST_JUMP_LINE < $CT_LINE) — established traffic now walks every session chain"
+fi
+
+pass "10.26: ct rule first, both jumps after it, site deny last (ct $CT_LINE, jumps $FIRST_JUMP_LINE-$LAST_JUMP_LINE, deny $DENY_LINE; appended control at $CTRL_LINE)"
 nft delete table inet authnft 2>/dev/null || true
 
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

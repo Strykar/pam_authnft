@@ -197,11 +197,18 @@ session_built() { # <session-tag>
 
 ct_rule() { nft add rule inet authnft filter ct state established,related counter accept comment '"ct-accept"' || die "ct rule"; }
 jump_rule() { nft add rule inet authnft filter jump "session_$1" || die "jump rule for $1"; }
-# The same jump, prepended. `add` appends, which is what puts a later
-# session behind an already-placed site deny (E4). `insert` puts every
-# jump at the head of the chain, so the deny stays last however many
-# sessions open after it.
-jump_rule_insert() { nft insert rule inet authnft filter jump "session_$1" || die "jump insert for $1"; }
+# The placement the module actually uses: immediately after the ct rule.
+# `add` alone appends, which puts a later session behind an already-placed
+# site deny (E4). Positioning after the ct rule keeps every jump ahead of
+# that deny while leaving the established-accept first, so established
+# traffic short-circuits instead of walking every live session chain.
+jump_rule_after_ct() { # <session-tag>
+    local h
+    h=$(nft -a list chain inet authnft filter | awk '/ct-accept/{print $NF}')
+    [[ -n "$h" ]] || die "no ct rule to position after (session $1)"
+    nft add rule inet authnft filter position "$h" jump "session_$1" \
+        || die "positioned jump for $1"
+}
 site_deny() { nft add rule inet authnft filter tcp dport "$1" counter drop comment "\"deny-$1\"" || die "site deny for $1"; }
 table_down() { nft delete table inet authnft 2>/dev/null; return 0; }
 
@@ -415,32 +422,53 @@ printf "       shadow control: sess-b=%s (0 proves bob's jump was never reached)
 # from "the whole table is broken".
 check E5 PASS "$(verdict $OK_SRC $SVC)" "the session that predates the deny still works (E4 control)"
 
-# E4 with one verb changed. Everything else is identical: same order of
-# operations, same deny already in place, same fragment. `insert` puts
-# bob's jump ahead of the deny instead of behind it.
-table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule_insert a; site_deny 19102
+# E4 with the placement changed and nothing else: same order of
+# operations, same deny already in place, same fragment. Positioning after
+# the ct rule puts bob's jump ahead of the deny instead of behind it.
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule_after_ct a; site_deny 19102
 nft -f - <<RULES || die "bob's session state for E6"
 add chain inet authnft session_b
 add set inet authnft session_b_v4 { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }
 add element inet authnft session_b_v4 { "$CG_B" . $OK_SRC timeout 1d }
 add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4 tcp dport 19102 counter accept comment "sess-b"
 RULES
-jump_rule_insert b
-check E6 PASS "$(verdict $OK_SRC 19102)" "same session, jump INSERTED rather than appended (#105 fix)"
+jump_rule_after_ct b
+check E6 PASS "$(verdict $OK_SRC 19102)" "same session, jump positioned after the ct rule (#105 fix)"
 printf "       sess-b=%s (>0 proves bob's jump was reached this time)\n" "$(cnt sess-b)"
 # And the deny still denies: a source in nobody's set must not ride in on
 # the reordering. Without this E6 could pass by breaking enforcement.
-check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with jumps inserted (E6 control)"
+check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with the jump positioned (E6 control)"
 
 # E2 with the jump inserted. E2 is the admin who puts the deny in the shared
 # chain before any session has ever opened, which is the normal case after a
 # reboot: the deny is restored from the site ruleset, then people log in.
-# Appending shadowed every one of them. Inserting means position within the
-# chain stops mattering at all, which is what the deployment contract in
-# ADMIN_GUIDE is allowed to claim.
-table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule_insert a
-check E8 PASS "$(verdict $OK_SRC $SVC)" "deny placed BEFORE any session, jump inserted"
+# Appending shadowed every one of them. Positioning after the ct rule means
+# where the admin puts the deny stops mattering, which is what the
+# deployment contract in ADMIN_GUIDE is allowed to claim.
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule_after_ct a
+check E8 PASS "$(verdict $OK_SRC $SVC)" "deny placed BEFORE any session, jump positioned after the ct rule"
 printf "       sess-a=%s (>0 proves the jump ran ahead of a deny that predates it)\n" "$(cnt sess-a)"
+
+# Why the jump goes after the ct rule and not at the head of the chain.
+# With jumps first, every packet of every established flow walks every live
+# session chain before reaching the established-accept, a per-packet cost
+# that grows with the number of logged-in users. This arm pins that it does
+# not: once a flow is established, the ct rule takes it and the session
+# chain never sees it again.
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule_after_ct a
+nft insert rule inet authnft session_a counter comment '"entered-a"' || die "traversal counter"
+exec 9<>/dev/tcp/127.0.0.1/$SVC || die "E9: flow would not open"
+printf 'one\n' >&9; read -t 3 -r _ <&9 || die "E9: flow never worked"
+E9_ENTERED=$(cnt entered-a); E9_ENTERED=${E9_ENTERED:-0}
+E9_CT=$(cnt ct-accept); E9_CT=${E9_CT:-0}
+for _ in 1 2 3; do drain 9; printf 'more\n' >&9; read -t 3 -r _ <&9 || true; done
+E9_ENTERED2=$(cnt entered-a); E9_ENTERED2=${E9_ENTERED2:-0}
+E9_CT2=$(cnt ct-accept); E9_CT2=${E9_CT2:-0}
+check E9 PASS "$([[ "$E9_ENTERED2" -eq "$E9_ENTERED" && "$E9_CT2" -gt "$E9_CT" ]] && echo PASS || echo BLOCK)" \
+    "established traffic short-circuits at the ct rule, never entering a session chain"
+printf "       session-chain entries %s -> %s (must not move), ct-accept %s -> %s (must move)\n" \
+    "$E9_ENTERED" "$E9_ENTERED2" "$E9_CT" "$E9_CT2"
+exec 9<&- 2>/dev/null
 
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
@@ -710,7 +738,7 @@ done
 # A section that dies quietly, or an arm that is edited out, shows up here
 # as a short matrix rather than as a clean pass. This is the D3 class the
 # codex bot found: the run reported success for cases it never executed.
-EXPECTED_CASES=34
+EXPECTED_CASES=35
 if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
     printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
         "${#ROWS[@]}" "$EXPECTED_CASES"

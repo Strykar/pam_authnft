@@ -257,6 +257,42 @@ int authnft_validate_fragment_includes(pam_handle_t *pamh, const char *path,
 
 
 /*
+ * Handle of the shared chain's ct accept rule, or 0 if it cannot be read.
+ *
+ * The session jump is placed immediately after this rule rather than at the
+ * head of the chain. Both keep every jump ahead of a site deny appended
+ * later, which is what #105 needs. Only this one leaves the
+ * established-accept first: with jumps at the head, every packet of every
+ * established flow walks every live session chain before reaching it, a
+ * per-packet cost that grows with the number of logged-in users. Measured
+ * at three sessions: each chain counted 15 packets of a single unsessioned
+ * flow that the ct rule then accepted 14 times.
+ */
+static uint64_t ct_rule_handle(struct nft_ctx *ctx) {
+    nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_HANDLE);
+    nft_ctx_buffer_output(ctx);
+    int rc = nft_run_cmd_from_buffer(ctx,
+        "list chain inet " TABLE_NAME " filter");
+    const char *out = nft_ctx_get_output_buffer(ctx);
+    uint64_t handle = 0;
+
+    if (rc == 0 && out) {
+        const char *line = strstr(out, "ct state established,related");
+        if (line) {
+            /* Bound the search to this rule's line: an unhandled ct rule
+             * would otherwise pick up the next rule's handle. */
+            const char *eol = strchr(line, '\n');
+            const char *hp = strstr(line, "# handle ");
+            if (hp && (!eol || hp < eol))
+                handle = strtoull(hp + 9, NULL, 10);
+        }
+    }
+    nft_ctx_unbuffer_output(ctx);
+    nft_ctx_output_set_flags(ctx, 0);
+    return handle;
+}
+
+/*
  * Best-effort rollback of partial nft state created by nft_handler_setup
  * before it failed. Removes the per-session chain, three sets, and (if
  * captured) the jump rule. Tolerates absent objects — if nothing was
@@ -549,26 +585,47 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * make libnftables print the committed rule with its kernel-assigned
      * handle, which we parse and store for cleanup.
      *
-     * `insert`, not `add`. The site's default-deny lives outside the
-     * module and the admin can only place it after the jumps that exist
-     * when they place it. Appending put every later session behind it:
-     * the session authenticated, installed correct-looking rules, and
-     * passed no traffic, while an earlier session on the same host kept
-     * working. Inserting puts each jump at the head of the chain, so the
-     * deny stays last however many sessions open afterwards.
+     * Positioned after the ct rule, not appended. The site's default-deny
+     * lives outside the module and the admin can only place it after the
+     * jumps that exist when they place it. Appending put every later
+     * session behind it: the session authenticated, installed
+     * correct-looking rules, and passed no traffic, while an earlier
+     * session on the same host kept working.
      *
      * Order among session jumps does not matter: each matches only its
      * own cgroup and source, so at most one can fire for a given packet.
-     * Measured as E4 (appended, shadowed) against E6 (inserted, admitted)
-     * in tests/packet_flow_matrix.sh, with E5 and E7 as controls. #105.
+     * What does matter is that the ct rule stays first, so established
+     * traffic short-circuits before walking any session chain.
+     *
+     * Measured as E4 (appended, shadowed) against E6 (admitted), with E5
+     * and E7 as controls, plus E8 for a deny that predates every session,
+     * in tests/packet_flow_matrix.sh. #105.
      */
+    /* Read the handle before switching the context into echo mode for call
+     * 2: ct_rule_handle drives its own buffering and flags, and doing that
+     * inside call 2's setup tears down the echo output the jump-handle
+     * parse below depends on. */
+    uint64_t cth = ct_rule_handle(ctx);
+
     nft_ctx_output_set_flags(ctx,
         NFT_CTX_OUTPUT_ECHO | NFT_CTX_OUTPUT_HANDLE);
     nft_ctx_buffer_output(ctx);
 
-    snprintf(cmd, sizeof(cmd),
-             "insert rule inet %s filter jump %s",
-             TABLE_NAME, sd->chain_name);
+    if (cth) {
+        snprintf(cmd, sizeof(cmd),
+                 "add rule inet %s filter position %" PRIu64 " jump %s",
+                 TABLE_NAME, cth, sd->chain_name);
+    } else {
+        /* Fall back to the head of the chain. Still ahead of any site deny,
+         * so #105 stays fixed; it only costs the established fast path. A
+         * slower correct order beats a denied login. */
+        pam_syslog(pamh, LOG_WARNING,
+                   "authnft: could not read the ct rule handle; placing the "
+                   "jump at the head of the shared chain");
+        snprintf(cmd, sizeof(cmd),
+                 "insert rule inet %s filter jump %s",
+                 TABLE_NAME, sd->chain_name);
+    }
 
     DEBUG_PRINT("nft call 2 (jump rule):\n%s", cmd);
     if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
