@@ -161,7 +161,11 @@ check() { # <case-id> <expected PASS|BLOCK> <observed> <what this pins>
 # Setup failures are fatal, never observations. A half-built table has an
 # accept policy and no deny, so every BLOCK case would report PASS and the
 # run would look like a fleet of real findings. Die instead.
-die() { printf "${RED}>>> SETUP FAILED: %s${RESET}\n" "$*" >&2; exit 1; }
+# Writes to stdout as well as stderr. The inner script runs under
+# `ip netns exec`, and a die that only reached stderr came out empty at
+# the caller, so the run aborted with no stated reason. A harness that
+# stops without saying why is barely better than one that lies.
+die() { printf "${RED}>>> SETUP FAILED: %s${RESET}\n" "$*" | tee /dev/stderr; exit 1; }
 
 module_up() { # <session-tag> <cgroup path> <src addr>
     local tag="$1" cg="$2" src="$3"
@@ -188,10 +192,16 @@ site_deny() { nft add rule inet authnft filter tcp dport "$1" counter drop comme
 table_down() { nft delete table inet authnft 2>/dev/null; return 0; }
 
 # close_session, exactly as nft_handler_cleanup issues it.
+# Teardown is one atomic transaction: if any object is missing the whole
+# batch fails and the session is still up. That failed silently once and a
+# revocation case passed for the wrong reason (the session had never closed),
+# so this helper now proves its own postcondition instead of trusting nft's
+# exit status alone. Every section inherits the check.
 module_down() { # <session-tag>
     local tag="$1" h
     h=$(nft -a list chain inet authnft filter | awk "/jump session_$tag/{print \$NF}")
-    nft -f - <<RULES
+    [[ -n "$h" ]] || die "module_down $tag: no jump rule to delete (session was never up?)"
+    nft -f - <<RULES || die "module_down $tag: teardown transaction failed"
 delete rule inet authnft filter handle $h
 flush chain inet authnft session_$tag
 delete chain inet authnft session_$tag
@@ -199,6 +209,9 @@ delete set inet authnft session_${tag}_v4
 delete set inet authnft session_${tag}_v6
 delete set inet authnft session_${tag}_cg
 RULES
+    nft list chain inet authnft "session_$tag" >/dev/null 2>&1 && \
+        die "module_down $tag: chain still present after teardown"
+    return 0
 }
 
 cnt() { nft list table inet authnft 2>/dev/null | grep "$1" | grep -oP 'packets \K[0-9]+' | head -1; }
