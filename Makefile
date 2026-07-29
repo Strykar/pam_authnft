@@ -213,6 +213,20 @@ $(INCLUDE_WALK_DRIVER): tests/include_walk_driver.c $(OBJS) include/nft_validato
 test-include-walk: $(INCLUDE_WALK_DRIVER)
 	sudo ./tests/include_walk_test.sh
 
+# Session mark id allocation (#103). The counter lives at a fixed path under
+# /run/authnft, so the tests run in a private mount namespace with a tmpfs
+# over it: consuming ids on the host, or leaving the counter at its
+# exhaustion value, would affect live sessions. Needs root for the mount.
+SESSION_MARK_BIN = tests/test_session_mark
+
+$(SESSION_MARK_BIN): tests/test_session_mark.c src/session_file.c include/authnft.h
+	$(CC) -Wall -Wextra -O0 -g -Iinclude -D_GNU_SOURCE \
+	    -fsanitize=address,undefined -fno-omit-frame-pointer \
+	    tests/test_session_mark.c src/session_file.c -o $@ -lpam
+
+test-session-mark: $(SESSION_MARK_BIN)
+	sudo ./tests/session_mark_test.sh
+
 # Containerised workflows. Every test surface the project ships runs
 # inside a booted-systemd container on any host with podman or docker
 # — no sudo required, no host state mutation.
@@ -703,7 +717,7 @@ fuzz-coverage-gate:
 # committed artefact, browsable without rebuilding. Re-run
 # `make fuzz-coverage` to refresh.
 clean:
-	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(TEST_PEER_LOOKUP) $(ORACLE_RUNNER) $(INCLUDE_WALK_DRIVER) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
+	rm -rf $(OBJ_DIR) $(FUZZ_OUT) $(FUZZ_COV_OUT) $(TARGET) $(TEST_BIN) $(TEST_BIN).mull $(TEST_VALIDATOR) $(TEST_VALIDATOR).mull $(TEST_UTIL_VALIDATOR) $(TEST_UTIL_VALIDATOR).mull $(TEST_PEER_LOOKUP) $(ORACLE_RUNNER) $(INCLUDE_WALK_DRIVER) $(SESSION_MARK_BIN) $(SBOM) *.d rules.tmp trace.log trace-claims.log trace-features.log man/pam_authnft.8 .container-result
 
 distclean: clean
 	@if sudo nft list tables 2>/dev/null | grep -q "inet authnft"; then \
@@ -711,7 +725,7 @@ distclean: clean
 	fi
 	@sudo rm -f /etc/pam.d/authnft_test /etc/authnft/users/$(TEST_USER)
 
-.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-packet-flow test-include-walk test-container \
+.PHONY: all debug clean fuzz fuzz-coverage fuzz-coverage-gate reproducibility-check sbom mutation-report test test-oracle test-symbols test-integration test-packet-match test-packet-flow test-include-walk test-session-mark test-container \
         test-integration-container test-musl trace trace-container trace-features \
         audit audit-container docs-drift \
         distclean install install-tmpfiles uninstall man install-man

@@ -62,7 +62,8 @@ table inet authnft {
 
     chain filter {
         type filter hook input priority filter - 1; policy accept;
-        ct state established,related accept
+        ct state established,related ct mark & 0x00ffffff == 0x00000000 accept
+        ct state established,related ct mark & 0x00ffffff == @live_sessions accept
         jump session_alice_1127936
     }
 
@@ -97,11 +98,12 @@ configuration.
 - The match only applies to sockets created inside the session. A
   socket that existed before the session opened, such as the SSH
   control connection, keeps the cgroup it was created in and is never
-  matched. The module handles that traffic by adding `ct state
-  established,related accept` to the shared `filter` chain.
-- Fragments may `include` other files, but pam_authnft only checks
-  ownership and mode on the top-level fragment. Keeping every included
-  file root-owned and not world-writable is the administrator's job.
+  matched. The shared chain carries that traffic on its untagged arm,
+  which is also why closing a session does not disturb it.
+- The established-accept gate carries a flow only if conntrack was
+  already tracking it when it opened. On a host with no stateful rules
+  at all, where pam_authnft introduces the first one, a connection that
+  predates it is not retroactively covered (issue #111).
 
 ## Documentation and contributing
 

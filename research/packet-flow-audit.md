@@ -32,7 +32,7 @@ key is a cgroup path.
     C1     PASS     PASS     pre-session (Class B) flow survives, ct rule present
     C2     BLOCK    BLOCK    same flow with the ct rule deleted
     C3     BLOCK    BLOCK    flow that predates conntrack tracking, ct rule added after
-    D1     PASS     PASS     flow admitted during the session, after close_session
+    D1     BLOCK    BLOCK    flow admitted during the session, revoked at close_session
     D2     BLOCK    BLOCK    new flow after close_session
     D3     BLOCK    BLOCK    same flow after a conntrack flush by source address
     E1     PASS     PASS     deny appended to the shared chain AFTER the jump
@@ -121,11 +121,13 @@ What it controls:
 
 What it does not control, and cannot:
 
-- **Flows already established.** Teardown removes the admission path and
-  nothing else. An admitted flow keeps running to its natural end (D1).
-  Conntrack is state the module never had a handle on: `grep conntrack src/`
-  returns nothing. A ctnetlink flush does revoke it (D3), which is what
-  authpf does and what #103 proposes.
+- ~~**Flows already established.**~~ Fixed. Teardown used to remove the
+  admission path and nothing else, so an admitted flow ran to its natural
+  end. Each session now tags its connections with an id in the conntrack
+  mark and the shared chain accepts established traffic only while that id
+  is live, so close revokes the flow on its next packet (D1, I2). A
+  ctnetlink flush by source address still works too (D3) and remains the
+  fallback where no id was allocated.
 - **Whether an accept is final.** Any base chain at a higher priority number
   on the same hook can overrule it (E3), and the module has no way to detect
   that arrangement. An earlier terminal rule in the shared chain used to
@@ -178,7 +180,7 @@ Two structural notes for future harnesses:
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | Established flows outlive close_session (D1) | issue #103, docs corrected, pinned by D1/D2/D3; the proposed ct mark gate measured by I1-I6, not yet implemented |
+| 1 | Established flows outlive close_session (D1) | **fixed.** The ct mark gate shipped; D1's expectation flipped from PASS to BLOCK and that PASS was the bug. Pinned by D1-D3, I1-I6 and integration 10.27 |
 | 2 | Two of three site-deny placements silently defeat the module (E2, E3) | issue #105; the ordering half fixed by `0327f21`, pinned by E4-E9 and integration 10.26. E3 remains, unfixable by rule order |
 | 3 | The ct rule does not rescue a flow conntrack was not already tracking (C3) | issue #111, precondition documented in ARCHITECTURE.txt, pinned by C1/C2/C3 |
 | 4 | ARCHITECTURE.txt cites 10.12 as validating Class B survival; 10.12 validates the negative half only | corrected to cite C1/C2 |

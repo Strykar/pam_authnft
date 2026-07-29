@@ -195,7 +195,32 @@ session_built() { # <session-tag>
     done
 }
 
-ct_rule() { nft add rule inet authnft filter ct state established,related counter accept comment '"ct-accept"' || die "ct rule"; }
+# The shared gate, as the module builds it. Two arms, not one unconditional
+# accept: untagged flows (the SSH connection, anything the module does not
+# govern) accept outright, tagged flows only while their id is live.
+#
+# The unsessioned arm keeps the comment "ct-accept" because it plays the
+# same role the single rule used to, and the arms that measure Class B
+# survival count it. Sections that never tag a session see no behavioural
+# change from this: their flows carry mark 0 and the unsessioned arm takes
+# them, exactly as the old rule did.
+ct_rule() {
+    nft -f - <<'RULES' || die "ct gate"
+add set inet authnft live_sessions { type mark; }
+add rule inet authnft filter ct state established,related ct mark and 0x00ffffff 0x0 counter accept comment "ct-accept"
+add rule inet authnft filter ct state established,related ct mark and 0x00ffffff @live_sessions counter accept comment "ct-live"
+RULES
+}
+
+# Tag a session's new connections, as the module's session chain does, and
+# register the id as live. Only the sections that measure revocation need
+# this; elsewhere a session's flows stay untagged.
+session_tag() { # <session-tag> <session-id>
+    nft insert rule inet authnft "session_$1" ct state new ct mark set ct mark and 0xff000000 or "$2" \
+        || die "tag rule for $1"
+    nft add element inet authnft live_sessions "{ $2 }" || die "live element for $1"
+}
+revoke() { nft delete element inet authnft live_sessions "{ $1 }" || die "revoke $1"; }
 # Plain append. In a chain that holds only the ct rule this lands the jump
 # in the same place the module puts it, which is why the sections that just
 # need a working session use it. Where the placement itself is the thing
@@ -208,7 +233,7 @@ jump_rule() { nft add rule inet authnft filter jump "session_$1" || die "jump ru
 # traffic short-circuits instead of walking every live session chain.
 jump_rule_after_ct() { # <session-tag>
     local h
-    h=$(nft -a list chain inet authnft filter | awk '/ct-accept/{print $NF}')
+    h=$(nft -a list chain inet authnft filter | awk '/ct-live/{print $NF}')
     [[ -n "$h" ]] || die "no ct rule to position after (session $1)"
     nft add rule inet authnft filter position "$h" jump "session_$1" \
         || die "positioned jump for $1"
@@ -316,7 +341,9 @@ table_down
 nft -f - <<RULES || die "C setup"
 add table inet authnft
 add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
-add rule inet authnft filter ct state established,related counter accept comment "ct-accept"
+add set inet authnft live_sessions { type mark; }
+add rule inet authnft filter ct state established,related ct mark and 0x00ffffff 0x0 counter accept comment "ct-accept"
+add rule inet authnft filter ct state established,related ct mark and 0x00ffffff @live_sessions counter accept comment "ct-live"
 RULES
 exec 3<>/dev/tcp/127.0.0.1/$ALT || die "could not open the pre-session flow"
 printf 'one\n' >&3; read -t 3 -r _ <&3 || die "pre-session flow never worked"
@@ -327,8 +354,13 @@ check C1 PASS "$C1" "pre-session (Class B) flow survives, ct rule present"
 
 # Same flow, ct rule removed. If this still passes, the ct rule is not the
 # thing carrying Class B traffic and ARCHITECTURE.txt is wrong.
-H=$(nft -a list chain inet authnft filter | awk '/ct-accept/{print $NF}')
-nft delete rule inet authnft filter handle "$H" || die "could not delete ct rule"
+# Both arms: deleting only one leaves the other carrying the flow, and the
+# case would report the gate as load-bearing when half of it was still there.
+for c in ct-live ct-accept; do
+    H=$(nft -a list chain inet authnft filter | awk -v c="$c" '$0 ~ c {print $NF}')
+    [[ -n "$H" ]] || die "no $c rule to delete"
+    nft delete rule inet authnft filter handle "$H" || die "could not delete $c"
+done
 printf 'three\n' >&3
 if read -t 3 -r _ <&3; then C2=PASS; else C2=BLOCK; fi
 check C2 BLOCK "$C2" "same flow with the ct rule deleted"
@@ -364,23 +396,31 @@ exec 5<&- 2>/dev/null
 # ======================================================================
 note "D. Teardown: what close_session does and does not revoke (#103)"
 # ======================================================================
-table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule a; site_deny "$SVC"
+D_SID=0x000001
+table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule_after_ct a
+session_tag a "$D_SID"; site_deny "$SVC"
 exec 4<>/dev/tcp/127.0.0.1/$SVC || { echo "session flow would not open" >&2; exit 1; }
 printf 'one\n' >&4; read -t 3 -r _ <&4 || { echo "session flow never worked" >&2; exit 1; }
-CT_BEFORE_D1=$(cnt ct-accept); CT_BEFORE_D1=${CT_BEFORE_D1:-0}
+
+# Close as close_session does it: revoke the id, then tear the per-session
+# objects down.
+revoke "$D_SID"
 module_down a
-printf 'two\n' >&4
+drain 4; printf 'two\n' >&4
 if read -t 3 -r _ <&4; then D1=PASS; else D1=BLOCK; fi
-# PASS is the documented bound, not a bug: teardown removes the admission
-# path for new flows and leaves conntrack alone. If this ever flips to
-# BLOCK, revocation semantics changed and the docs need to change with it.
-CT_BEFORE_D1=${CT_BEFORE_D1:-0}
-check D1 PASS  "$D1" "flow admitted during the session, after close_session"
-admitted_by D1 ct-accept "$CT_BEFORE_D1"
+# This expectation flipped when the gate landed, and the PASS it used to
+# carry was the bug: the flow kept running because the shared
+# established-accept fired before any session rule and conntrack never
+# heard about the teardown (#103). The gate makes the next packet of a
+# revoked flow fall through to the site deny.
+check D1 BLOCK "$D1" "flow admitted during the session, revoked at close_session"
 check D2 BLOCK "$(verdict $OK_SRC $SVC)" "new flow after close_session"
 
+# D3 predates the gate: a conntrack flush by source address revokes the
+# flow too, which is what authpf does. Kept because it is still true and
+# still the fallback when no id was ever allocated.
 conntrack -D -s "$OK_SRC" >/dev/null 2>&1
-printf 'three\n' >&4
+drain 4; printf 'three\n' >&4
 if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
 check D3 BLOCK "$D3" "same flow after a conntrack flush by source address"
 exec 4<&- 2>/dev/null

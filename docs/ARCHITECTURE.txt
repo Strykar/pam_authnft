@@ -299,7 +299,7 @@ Trust model
       (typically `system.slice`). `socket cgroupv2 level 2` returns
       that cgroup, NOT the session scope. The match does not fire.
   Class B traffic survives because pam_authnft adds
-  `ct state established,related accept` to the shared `filter`
+  an established-accept gate to the shared `filter`
   chain ahead of any jump rules. This short-circuits before
   the cgroup match. Integration test 10.12 validates the
   match half of this, that a pre-scope socket does not match

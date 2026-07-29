@@ -23,6 +23,8 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <syslog.h>
@@ -30,8 +32,113 @@
 #include <unistd.h>
 
 #define SESSION_DIR  "/run/authnft/sessions"
+#define RUN_DIR      "/run/authnft"
+#define MARK_COUNTER RUN_DIR "/session-mark-counter"
 #define PATH_MAX_LEN 256
 #define JSON_MAX     1024
+
+/*
+ * Session mark id allocation. See include/authnft.h for why the counter is
+ * monotonic per boot and why 0 is reserved.
+ *
+ * Everything else in this file is best-effort observability. This is not: a
+ * session with no id cannot be revoked at close, so every failure path
+ * returns 0 and the caller denies the session rather than admitting one it
+ * cannot later shut off.
+ *
+ * flock serialises concurrent open_sessions. Without it two logins racing
+ * can read the same value and both take it, which is the id reuse that I4
+ * shows resurrects revoked flows.
+ */
+uint32_t session_mark_alloc(pam_handle_t *pamh) {
+    char buf[32];
+    uint32_t cur = 0, next;
+    int fd, len;
+    ssize_t n;
+
+    /* tmpfiles.d creates /run/authnft at boot, but the module can be
+     * installed and a session opened before that has run. The session
+     * identity file treats a missing directory as a warning and carries on,
+     * because it is observability. This is not: without the counter no id
+     * can be issued and every session is denied. Create it rather than
+     * fail on an install-order accident. Mode matches data/authnft.tmpfiles. */
+    if (mkdir(RUN_DIR, 0755) != 0 && errno != EEXIST) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot create %s: %s", RUN_DIR, strerror(errno));
+        return 0;
+    }
+
+    fd = open(MARK_COUNTER, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot open %s: %s", MARK_COUNTER, strerror(errno));
+        return 0;
+    }
+    if (flock(fd, LOCK_EX) != 0) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot lock %s: %s", MARK_COUNTER, strerror(errno));
+        close(fd);
+        return 0;
+    }
+
+    n = pread(fd, buf, sizeof(buf) - 1, 0);
+    if (n > 0) {
+        char *end;
+        unsigned long v;
+
+        buf[n] = '\0';
+        errno = 0;
+        v = strtoul(buf, &end, 10);
+
+        /* An absent or empty file is a legitimate fresh boot and starts at
+         * 1. A file that exists but does not parse is not: strtoul yields 0
+         * for garbage, which would restart the counter while conntrack still
+         * holds entries carrying the ids already issued. That is the reuse
+         * this counter exists to prevent, so refuse instead. */
+        while (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t')
+            end++;
+        if (end == buf || *end != '\0' || errno == ERANGE || v > AUTHNFT_MARK_MAX) {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: %s is corrupt; refusing to reissue ids that "
+                       "live conntrack entries may still carry. Remove it only "
+                       "after flushing conntrack.", MARK_COUNTER);
+            flock(fd, LOCK_UN);
+            close(fd);
+            return 0;
+        }
+        cur = (uint32_t)v;
+    }
+
+    /* Refuse rather than wrap. Wrapping hands a live session an id a stale
+     * conntrack entry may still carry, which is precisely the failure the
+     * counter exists to prevent. AUTHNFT_MARK_MAX is 16.7M ids per boot. */
+    if (cur >= AUTHNFT_MARK_MAX) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: session mark space exhausted (%u ids this boot); "
+                   "refusing rather than reusing an id a live conntrack entry "
+                   "may still carry", cur);
+        flock(fd, LOCK_UN);
+        close(fd);
+        return 0;
+    }
+    next = cur + 1;
+
+    len = snprintf(buf, sizeof(buf), "%u\n", next);
+    if (len < 0 || (size_t)len >= sizeof(buf) ||
+        pwrite(fd, buf, (size_t)len, 0) != (ssize_t)len ||
+        ftruncate(fd, (off_t)len) != 0) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: cannot persist session mark counter: %s",
+                   strerror(errno));
+        flock(fd, LOCK_UN);
+        close(fd);
+        return 0;
+    }
+
+    flock(fd, LOCK_UN);
+    close(fd);
+    return next;
+}
 
 static void session_file_path(char out[PATH_MAX_LEN], const char *scope_unit) {
     snprintf(out, PATH_MAX_LEN, SESSION_DIR "/%s.json", scope_unit);

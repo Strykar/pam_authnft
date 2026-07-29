@@ -59,6 +59,25 @@
  * Captured from PAM env "AUTHNFT_CORRELATION" (sanitized) or synthesized
  * at open_session if the env var is absent.
  */
+/*
+ * Session mark slice.
+ *
+ * A session tags its connections with an id in the low AUTHNFT_MARK_BITS of
+ * the conntrack mark; the shared chain gates its established-accept on that
+ * id still being live. The top bits are the administrator's and the module
+ * preserves them, so any rule of theirs that marks a connection keeps its
+ * value through the session tag.
+ *
+ * 0 is reserved. An empty session slice means "not admitted by any session",
+ * which is what carries the SSH connection and everything else the module
+ * does not govern. Comparisons therefore mask before testing, never against
+ * a bare zero. Measured as I6 of `make test-packet-flow`.
+ */
+#define AUTHNFT_MARK_BITS   24
+#define AUTHNFT_MARK_MASK   0x00ffffffu
+#define AUTHNFT_MARK_ADMIN  0xff000000u
+#define AUTHNFT_MARK_MAX    AUTHNFT_MARK_MASK
+
 typedef struct {
     char     cg_path[CGROUP_PATH_MAX];
     char     scope_unit[UNIT_BUF_SIZE];
@@ -70,6 +89,7 @@ typedef struct {
     char     set_v6[SET_NAME_MAX];
     char     set_cg[SET_NAME_MAX];
     uint64_t jump_handle;                 /* 0 = not captured */
+    uint32_t session_mark;                /* ct mark id; 0 = unallocated */
 } authnft_session_t;
 
 /*
@@ -247,6 +267,22 @@ ssize_t keyring_read_serial(int32_t serial, char *out, size_t out_sz);
  * currently invoked pre-sandbox in lockstep with PAM_RHOST parsing.
  */
 int peer_lookup_tcp(pam_handle_t *pamh, pid_t pid, char *out, size_t out_sz);
+
+/*
+ * session_mark_alloc:
+ * Allocates a session mark id, or returns 0 on failure.
+ *
+ * Monotonic per boot, from a counter in /run. That lifetime is exact rather
+ * than convenient: conntrack state is wiped on reboot too, so no entry can
+ * survive to collide with a restarted counter. An id must not repeat while a
+ * conntrack entry can still carry it, because a reused id resurrects the
+ * flows its previous holder's close revoked (I4 of make test-packet-flow).
+ *
+ * Unlike the session identity file, this is not best-effort. A session that
+ * cannot get an id cannot be revoked at close, so the caller denies the
+ * session on 0 rather than continuing untagged.
+ */
+uint32_t session_mark_alloc(pam_handle_t *pamh);
 
 /*
  * session_file_write:

@@ -16,7 +16,7 @@ matters most:
   pin allowed destinations, or enable masquerade only for that session.
   Filtering applies to sockets the user opens inside their session
   (listeners, outbound connections); the SSH control connection itself
-  is handled by the `ct state established,related accept` rule the module
+  is handled by the shared established-accept the module
   adds to the shared filter chain ahead of session jumps. See
   [ARCHITECTURE.txt](ARCHITECTURE.txt) for the full trust model.
 - **VPN concentrators** (WireGuard, OpenConnect, strongSwan) — per-tunnel
@@ -86,7 +86,7 @@ sequenceDiagram
 
     Note over C,N: nft transaction 1
     C->>N: add table + shared filter chain
-    C->>N: ensure ct state established,related accept (added only if absent)
+    C->>N: ensure the established-accept gate (added only if absent)
     C->>N: add per-session chain
     C->>N: add 3 per-session sets (_v4, _v6, _cg)
     C->>N: add element { cg_path . src_ip } in the family's set<br/>(or the _cg set when no usable PAM_RHOST)
@@ -165,16 +165,26 @@ close_session — which takes the element with it — or deleting her
 per-session chain, instantly stops her rules from firing; bob's chain and
 set are untouched.
 
-What that stops is admission. No new connection is admitted once her
-rules are gone, but a connection already established keeps passing:
-conntrack still holds it, and the shared `ct state established,related
-accept` rule still matches it. close_session does not touch conntrack.
-The bound is therefore "no new access after logout", not "no access
-after logout", so a long transfer or a reverse tunnel opened during the
-session outlives the logout and ends on its own. Revoking those flows
-needs a conntrack flush, which is what authpf does at logout and what
-issue #103 tracks. Cases D1 to D3 of `make test-packet-flow` pin the
-behaviour as it stands.
+That stops admission, and it also stops the traffic her session already
+admitted. Each session is issued an id, which its chain writes into the
+conntrack mark of every connection it admits, and the shared chain
+accepts established traffic only while that id is in the live-sessions
+set. close_session removes the id, so the next packet of a long transfer
+or a reverse tunnel opened during her session finds no accepting rule and
+falls through to the site's deny.
+
+The bound is therefore "no access after logout", not merely "no new
+access". It used to be the latter: a connection established during a
+session kept running to its natural end, because the shared
+established-accept fired before any session rule and conntrack never
+heard about the teardown (issue #103).
+
+Flows the module never admitted are untagged and unaffected, which is
+what carries the SSH connection the login arrived on. Ids are never
+reused, since a recycled id would resurrect the flows its previous holder
+revoked. Cases D1 to D3 and I1 to I6 of `make test-packet-flow` pin the
+behaviour, and integration case 10.27 exercises the id lifecycle through
+the module.
 
 The module only ever adds `accept` rules, so it grants; it never denies.
 Whatever denies is the site's, and it has to sit somewhere the module's
@@ -183,7 +193,7 @@ both measured in `make test-packet-flow`.
 
 A deny inside the module's own `filter` chain works, wherever in that
 chain it sits. Each session's jump goes immediately after the shared
-`ct state established,related accept` rule rather than at the end, so every
+established-accept gate rather than at the end, so every
 jump precedes the deny no matter how many sessions open after it was placed
 [E6, E8], while established traffic still short-circuits at the ct rule
 without entering any session chain [E9]. Appending was the earlier behaviour

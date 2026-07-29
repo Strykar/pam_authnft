@@ -129,7 +129,7 @@ On session open, the module:
    and include paths outside */etc/authnft/*.
 10. Issues three libnftables calls:
     - **Call 1**: *add table*, shared *filter* chain with
-      *ct state established,related accept*, per-session chain
+      the established-accept gate, per-session chain
       *session_\<user\>_\<pid\>*, three per-session sets, session
       element.
     - **Call 2** (ECHO|HANDLE): *add rule* jump to per-session chain;

@@ -125,8 +125,9 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
     struct setup_result {
         int rc;
         uint64_t jump_handle;
+        uint32_t session_mark;
         authnft_reject_reason reason;
-    } res = { PAM_SESSION_ERR, 0, AUTHNFT_REJECT_NONE };
+    } res = { PAM_SESSION_ERR, 0, 0, AUTHNFT_REJECT_NONE };
 
     int pfd[2];
     if (pipe(pfd) < 0) {
@@ -152,13 +153,30 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
          * with this short-lived child instead of persisting in the sshd
          * monitor, where it raced the transient-scope teardown on a failed
          * session. A non-member is not managed by authnft — pass through. */
-        if (!nft_user_in_authnft_group(pamh, user))
+        if (!nft_user_in_authnft_group(pamh, user)) {
             res.rc = PAM_SUCCESS;
-        else if (sandbox_apply(pamh) < 0)
+        } else if ((sd->session_mark = session_mark_alloc(pamh)) == 0) {
+            /* Allocated here, in the child but before the filter, for the
+             * same reason the group lookup is: the counter needs flock,
+             * pread, pwrite and ftruncate, and the setup path's allowlist
+             * carries none of them. Adding four syscalls to a sandbox that
+             * exists to keep the nft path narrow is the wrong trade when the
+             * work can simply happen first.
+             *
+             * Denied rather than admitted untagged. An untagged flow reads
+             * as "not session-admitted" to the gate and would keep passing
+             * after close, which is the bug this whole change fixes. */
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: no session mark for %s; denying rather than "
+                       "admitting a session that cannot be revoked", user);
+            res.rc = PAM_SESSION_ERR;
+        } else if (sandbox_apply(pamh) < 0) {
             pam_syslog(pamh, LOG_ERR, "authnft: failed to apply sandbox");
-        else
+        } else {
             res.rc = nft_handler_setup(pamh, user, session_pid, sd, &res.reason);
+        }
         res.jump_handle = sd->jump_handle;
+        res.session_mark = sd->session_mark;
         for (size_t off = 0; off < sizeof(res); ) {
             ssize_t w = write(pfd[1], (const char *)&res + off,
                               sizeof(res) - off);
@@ -203,6 +221,9 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
     }
 
     sd->jump_handle = res.jump_handle;
+    /* The parent's copy is the one that reaches close_session via PAM
+     * data, and the id was allocated in the child. */
+    sd->session_mark = res.session_mark;
     emit_reject_message(pamh, user, res.reason);
     return res.rc;
 }

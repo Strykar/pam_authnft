@@ -304,7 +304,8 @@ pam_authnft creates a shared base chain and a per-session chain:
     chain filter {
         type filter hook input priority filter - 1;
         policy accept;
-        ct state established,related accept
+        ct state established,related ct mark & 0x00ffffff == 0x00000000 accept
+        ct state established,related ct mark & 0x00ffffff == @live_sessions accept
         jump session_<user>_<pid>     # one per active session
     }
 
