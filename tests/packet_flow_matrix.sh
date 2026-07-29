@@ -196,6 +196,10 @@ session_built() { # <session-tag>
 }
 
 ct_rule() { nft add rule inet authnft filter ct state established,related counter accept comment '"ct-accept"' || die "ct rule"; }
+# Plain append. In a chain that holds only the ct rule this lands the jump
+# in the same place the module puts it, which is why the sections that just
+# need a working session use it. Where the placement itself is the thing
+# under test, the E arms use jump_rule_after_ct and say so.
 jump_rule() { nft add rule inet authnft filter jump "session_$1" || die "jump rule for $1"; }
 # The placement the module actually uses: immediately after the ct rule.
 # `add` alone appends, which puts a later session behind an already-placed

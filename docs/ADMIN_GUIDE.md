@@ -229,10 +229,12 @@ sudo nft add rule inet authnft filter tcp dport { 5432, 6379 } counter drop \
     comment '"site-default-deny"'
 ```
 
-Position within that chain does not matter. The module inserts each
-session's jump at the head, so every jump precedes your deny however many
-sessions open afterwards, and whether the deny was placed before or after
-any of them [E6, E8]. Before this the module appended, and a session
+Position within that chain does not matter. The module places each
+session's jump immediately after its `ct state established,related accept`
+rule, so every jump precedes your deny however many sessions open
+afterwards, and whether the deny was placed before or after any of them
+[E6, E8]. The ct rule stays first, so established traffic short-circuits
+there instead of walking every live session chain [E9]. Before this the module appended, and a session
 opened after the deny was never reached: it authenticated, installed
 correct-looking rules, showed a moving counter and passed no traffic,
 while an earlier session on the same host kept working [E4, E5].
