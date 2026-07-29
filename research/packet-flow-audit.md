@@ -180,7 +180,7 @@ Two structural notes for future harnesses:
 |---|---|---|
 | 1 | Established flows outlive close_session (D1) | issue #103, docs corrected, pinned by D1/D2/D3; the proposed ct mark gate measured by I1-I6, not yet implemented |
 | 2 | Two of three site-deny placements silently defeat the module (E2, E3) | issue #105; the ordering half fixed by `0327f21`, pinned by E4-E9 and integration 10.26. E3 remains, unfixable by rule order |
-| 3 | The ct rule does not rescue a flow conntrack was not already tracking (C3) | undocumented precondition, pinned by C1/C2/C3, no issue filed yet |
+| 3 | The ct rule does not rescue a flow conntrack was not already tracking (C3) | issue #111, precondition documented in ARCHITECTURE.txt, pinned by C1/C2/C3 |
 | 4 | ARCHITECTURE.txt cites 10.12 as validating Class B survival; 10.12 validates the negative half only | corrected to cite C1/C2 |
 | 5 | A rule an included fragment adds to the shared chain outlives every session and keeps denying (G4, G5) | working as designed (INTEGRATIONS 4.5/4.6); pinned by G4/G5 |
 
@@ -191,8 +191,9 @@ rule lives outside the per-session chain, so close_session never had a handle
 on it and it persists (INTEGRATIONS 4.5 already documents that fragment
 objects outside the session chain are not cleaned up). G4/G5 pin the wire
 consequence: the leftover rule keeps dropping traffic after the session ends.
-Worth a doc note that shared-chain rules from an include are the admin's to
-clean up, but the module is behaving as specified.
+INTEGRATIONS 4.5 now says so directly: rules an included file adds to the
+shared chain outlive every session and keep acting on traffic, and retiring
+them is the site's job.
 
 ### Correction: real finding, wrong instrument (issue #108)
 
