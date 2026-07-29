@@ -375,7 +375,7 @@ done
 printf 'three\n' >&3
 if read -t 3 -r _ <&3; then C2=PASS; else C2=BLOCK; fi
 check C2 BLOCK "$C2" "same flow with the ct rule deleted"
-exec 3<&- 2>/dev/null
+exec 3<&-
 
 # The precondition nobody wrote down. Conntrack only tracks a flow it saw
 # from the start. If the module's ct rule is the first ct rule on the host,
@@ -402,7 +402,7 @@ check C3 BLOCK "$C3" "flow that predates conntrack tracking, ct rule added after
 # still land in the deny. Report both numbers rather than a story about why.
 printf "       ct-accept=%s deny-%s=%s (rule present, data packets still dropped)\n" \
     "$(cnt ct-accept)" "$ALT" "$(cnt "deny-$ALT")"
-exec 5<&- 2>/dev/null
+exec 5<&-
 
 # ======================================================================
 note "D. Teardown: what close_session does and does not revoke (#103)"
@@ -434,7 +434,7 @@ conntrack -D -s "$OK_SRC" >/dev/null 2>&1
 drain 4; printf 'three\n' >&4
 if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
 check D3 BLOCK "$D3" "same flow after a conntrack flush by source address"
-exec 4<&- 2>/dev/null
+exec 4<&-
 
 # ======================================================================
 note "E. Enforcement placement: where the site deny has to go (#105)"
@@ -523,7 +523,7 @@ check E9 PASS "$([[ "$E9_ENTERED2" -eq "$E9_ENTERED" && "$E9_CT2" -gt "$E9_CT" ]
     "established traffic short-circuits at the ct rule, never entering a session chain"
 printf "       session-chain entries %s -> %s (must not move), ct-accept %s -> %s (must move)\n" \
     "$E9_ENTERED" "$E9_ENTERED2" "$E9_CT" "$E9_CT2"
-exec 9<&- 2>/dev/null
+exec 9<&-
 
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
@@ -594,7 +594,7 @@ check G4 PASS  "$([[ $G_SHARED -gt 0 ]] && echo PASS || echo BLOCK)" "rule a fra
 # And the wire consequence of G4: that leftover rule still denies traffic
 # belonging to nobody's session, on a port the closed session never owned.
 check G5 BLOCK "$(verdict $OK_SRC 19102)" "leftover shared-chain fragment rule still drops after close"
-exec 6<&- 2>/dev/null
+exec 6<&-
 
 # ======================================================================
 note "I. Conntrack revocation: the ct mark gate proposed for #103"
@@ -733,7 +733,7 @@ else
     check I6 PASS "$([[ "$CTM_ADMIN" == "$ADMIN_BITS" ]] && echo PASS || echo BLOCK)" \
         "the session tag preserved the admin's mark bits ($CTM_LIVE, admin slice $CTM_ADMIN)"
 fi
-exec 7<&- 2>/dev/null; exec 8<&- 2>/dev/null
+exec 7<&-; exec 8<&-
 
 # ======================================================================
 note "H. Packet traces: the kernel's own account of the traversal"
