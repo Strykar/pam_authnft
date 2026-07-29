@@ -282,6 +282,17 @@ admitted_by() { # <case-id> <rule-comment> <count before>
 
 cnt() { nft list table inet authnft 2>/dev/null | grep "$1" | grep -oP 'packets \K[0-9]+' | head -1; }
 
+# Discard anything already queued on the socket before probing it. Without
+# this a reply that was in flight when the rules changed is read by the NEXT
+# probe and reports a revoked flow as alive, one assertion late. Same trap as
+# the nonce matching in tests/ct_mark_revocation_matrix.sh.
+#
+# Defined here, above section D, and not next to the other socket helpers
+# further down: bash resolves a function at the point of call, so a
+# definition below the first caller leaves D1, D3 and E9 running without
+# the guard and printing "drain: command not found" instead.
+drain() { local fd="$1" _junk; while read -r -t 0.3 -u "$fd" _junk 2>/dev/null; do :; done; return 0; }
+
 serve "$SVC" "$CG_A" || { echo "listener on $SVC never came up" >&2; exit 1; }
 serve "$ALT" "$CG_A" || { echo "listener on $ALT never came up" >&2; exit 1; }
 serve 19102 "$CG_B" || { echo "listener on 19102 never came up" >&2; exit 1; }
@@ -635,12 +646,6 @@ RULES
 # for the SSH connection that carried the login in. Opening it after the
 # deny hangs on the TCP connect timeout rather than failing, which is why
 # hold_open() bounds the connect.
-# Discard anything already queued on the socket before probing it. Without
-# this a reply that was in flight when the rules changed is read by the NEXT
-# probe and reports a revoked flow as alive, one assertion late. Same trap as
-# the nonce matching in tests/ct_mark_revocation_matrix.sh.
-drain() { local fd="$1" _junk; while read -r -t 0.3 -u "$fd" _junk 2>/dev/null; do :; done; return 0; }
-
 hold_open() { # <fd> <port>   returns 1 rather than blocking on a dropped SYN
     local fd="$1" port="$2"
     timeout 5 bash -c "exec 9<>/dev/tcp/127.0.0.1/$port" 2>/dev/null || return 1
