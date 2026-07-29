@@ -179,6 +179,20 @@ add set inet authnft session_${tag}_cg { typeof socket cgroupv2 level 2; flags t
 add element inet authnft session_${tag}_v4 { "$cg" . $src timeout 1d }
 add rule inet authnft session_$tag socket cgroupv2 level 2 . ip saddr @session_${tag}_v4 tcp dport $SVC counter accept comment "sess-$tag"
 RULES
+    session_built "$tag"
+}
+
+# Every object module_down will later delete has to exist now. A session
+# that builds partially makes module_down's transaction fail atomically,
+# which leaves the jump rule in place; the arm then measures a session that
+# never closed and reports it as one that did. Cost an hour in section I.
+session_built() { # <session-tag>
+    local tag="$1" t
+    t=$(nft list table inet authnft 2>/dev/null) || t=""
+    for obj in "chain session_$tag" "set session_${tag}_v4" \
+               "set session_${tag}_v6" "set session_${tag}_cg"; do
+        printf '%s' "$t" | grep -q "${obj#* } " || die "session $tag: missing $obj"
+    done
 }
 
 ct_rule() { nft add rule inet authnft filter ct state established,related counter accept comment '"ct-accept"' || die "ct rule"; }
@@ -212,6 +226,22 @@ RULES
     nft list chain inet authnft "session_$tag" >/dev/null 2>&1 && \
         die "module_down $tag: chain still present after teardown"
     return 0
+}
+
+# A PASS says a payload round-tripped. It does not say which rule let it
+# through, and on a policy-accept chain "nothing was enforcing" produces the
+# same PASS as "the intended rule fired". admitted_by asserts the counter on
+# the rule that was supposed to admit it actually moved.
+admitted_by() { # <case-id> <rule-comment> <count before>
+    local id="$1" comment="$2" before="$3" after
+    after=$(cnt "$comment"); after=${after:-0}; before=${before:-0}
+    if [[ "$after" -gt "$before" ]]; then
+        printf "       %s admitted by '%s' (%s -> %s)\n" "$id" "$comment" "$before" "$after"
+    else
+        printf "${RED}[FAIL]${RESET} %s: traffic passed but '%s' never counted (%s -> %s) — nothing was enforcing\n" \
+            "$id" "$comment" "$before" "$after" >&2
+        RC=1
+    fi
 }
 
 cnt() { nft list table inet authnft 2>/dev/null | grep "$1" | grep -oP 'packets \K[0-9]+' | head -1; }
@@ -326,13 +356,16 @@ note "D. Teardown: what close_session does and does not revoke (#103)"
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule a; site_deny "$SVC"
 exec 4<>/dev/tcp/127.0.0.1/$SVC || { echo "session flow would not open" >&2; exit 1; }
 printf 'one\n' >&4; read -t 3 -r _ <&4 || { echo "session flow never worked" >&2; exit 1; }
+CT_BEFORE_D1=$(cnt ct-accept); CT_BEFORE_D1=${CT_BEFORE_D1:-0}
 module_down a
 printf 'two\n' >&4
 if read -t 3 -r _ <&4; then D1=PASS; else D1=BLOCK; fi
 # PASS is the documented bound, not a bug: teardown removes the admission
 # path for new flows and leaves conntrack alone. If this ever flips to
 # BLOCK, revocation semantics changed and the docs need to change with it.
+CT_BEFORE_D1=${CT_BEFORE_D1:-0}
 check D1 PASS  "$D1" "flow admitted during the session, after close_session"
+admitted_by D1 ct-accept "$CT_BEFORE_D1"
 check D2 BLOCK "$(verdict $OK_SRC $SVC)" "new flow after close_session"
 
 conntrack -D -s "$OK_SRC" >/dev/null 2>&1
@@ -418,13 +451,25 @@ table_down; module_up a "$CG_A" "$OK_SRC"
 nft add rule inet authnft session_a socket cgroupv2 level 2 @session_a_cg tcp dport $ALT counter drop comment '"sess-a-deny"'
 nft add element inet authnft session_a_cg "{ \"$CG_A\" timeout 1d }"
 ct_rule; jump_rule a
+F1_BEFORE=$(cnt sess-a); F1_BEFORE=${F1_BEFORE:-0}
 check F1 PASS  "$(verdict $OK_SRC $SVC)" "fragment allow rule, no site deny in play"
+admitted_by F1 sess-a "$F1_BEFORE"
 check F2 BLOCK "$(verdict $OK_SRC $ALT)" "fragment deny rule inside the session chain"
 printf "       fragment deny counter: %s\n" "$(cnt sess-a-deny)"
 
 # And the same denied port once the session closes: the deny goes with it.
 module_down a
+# F3 passes because the deny went with the session, not because the traffic
+# was never sent or the table vanished. The rule's counter is unreachable
+# once its chain is gone, which is the proof; G2 separately pins that the
+# shared chain survived, so "everything vanished" cannot produce this pass.
 check F3 PASS "$(verdict $OK_SRC $ALT)" "fragment deny does not outlive the session"
+if [[ -n "$(cnt sess-a-deny)" ]]; then
+    printf "${RED}[FAIL]${RESET} F3: the fragment deny rule is still present after close\n" >&2
+    RC=1
+else
+    printf "       F3 control: the fragment deny rule is gone, not merely unmatched\n"
+fi
 
 # ======================================================================
 note "G. Cleanup boundary: what close_session leaves behind"
@@ -509,6 +554,7 @@ add rule inet authnft session_$tag ct state new ct mark set ct mark and $ADMIN_M
 add rule inet authnft session_$tag socket cgroupv2 level 2 . ip saddr @session_${tag}_v4 tcp dport $SVC counter accept comment "sess-$tag"
 add element inet authnft live_sessions { $sid }
 RULES
+    session_built "$tag"
     nft insert rule inet authnft filter jump "session_$tag" || die "jump for $tag"
 }
 
@@ -580,9 +626,11 @@ drain 8; printf 'two\n' >&8
 if read -t 3 -r _ <&8; then I2=PASS; else I2=BLOCK; fi
 check I2 BLOCK "$I2" "flow admitted during the session, after close (D1 fixed)"
 
+I3_BEFORE=$(cnt est-unsessioned); I3_BEFORE=${I3_BEFORE:-0}
 drain 7; printf 'two\n' >&7
 if read -t 3 -r _ <&7; then I3=PASS; else I3=BLOCK; fi
 check I3 PASS "$I3" "untagged flow survives the same close (the SSH connection)"
+admitted_by I3 est-unsessioned "$I3_BEFORE"
 printf "       est-unsessioned=%s est-live=%s\n" "$(cnt est-unsessioned)" "$(cnt est-live)"
 
 # Id reuse. The stale entry still carries the old id, so a new session handed
@@ -658,6 +706,16 @@ for row in "${ROWS[@]}"; do
     printf "    %-6s %-8s %-8s %s%s\n" "$id" "$want" "$got" "$desc" \
         "$([[ $st == MISMATCH ]] && echo '   <-- MISMATCH')"
 done
+
+# A section that dies quietly, or an arm that is edited out, shows up here
+# as a short matrix rather than as a clean pass. This is the D3 class the
+# codex bot found: the run reported success for cases it never executed.
+EXPECTED_CASES=34
+if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
+    printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
+        "${#ROWS[@]}" "$EXPECTED_CASES"
+    RC=1
+fi
 
 if [[ $RC -eq 0 ]]; then
     printf "\n${BLUE}>>> EVERY CASE MATCHED THE WIRE (kernel %s)${RESET}\n" "$(uname -r)"
