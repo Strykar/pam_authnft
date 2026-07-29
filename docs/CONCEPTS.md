@@ -182,9 +182,11 @@ accepts can win. Two arrangements, one that works and one that does not,
 both measured in `make test-packet-flow`.
 
 A deny inside the module's own `filter` chain works, wherever in that
-chain it sits. Each session's jump is inserted at the head rather than
-appended, so every jump precedes the deny no matter how many sessions
-open after it was placed [E6, E8]. Appending was the earlier behaviour
+chain it sits. Each session's jump goes immediately after the shared
+`ct state established,related accept` rule rather than at the end, so every
+jump precedes the deny no matter how many sessions open after it was placed
+[E6, E8], while established traffic still short-circuits at the ct rule
+without entering any session chain [E9]. Appending was the earlier behaviour
 and it meant a session opened after the deny was never reached at all,
 while an earlier session on the same host kept working [E4, E5].
 
