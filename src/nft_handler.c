@@ -285,6 +285,48 @@ int authnft_validate_fragment_includes(pam_handle_t *pamh, const char *path,
  * at three sessions: each chain counted 15 packets of a single unsessioned
  * flow that the ct rule then accepted 14 times.
  */
+/*
+ * Scan a `list chain` output (HANDLE flag set) for the pre-gate module's
+ * unconditional established-accept: the ct-state prefix with no "ct mark"
+ * on the line. Returns how many lines match; fills out[] (when given)
+ * with up to cap parsed rule handles.
+ *
+ * The handle is taken from the LAST "# handle " on the line. nft prints
+ * the rule handle at end of line, after any user comment, so a comment
+ * containing the literal "# handle " cannot spoof the parse — the same
+ * defence as the jump-handle parse in nft_handler_setup. A line whose
+ * handle does not parse to a nonzero number is counted but not filled:
+ * it is still a live legacy accept, just not one this pass can delete.
+ */
+static size_t scan_legacy_accepts(const char *out, uint64_t *handles,
+                                  size_t cap, size_t *n_fill) {
+    size_t n_match = 0, fill = 0;
+    const char *line = out;
+
+    while (line && (line = strstr(line, "ct state established,related"))) {
+        const char *eol = strchr(line, '\n');
+        size_t len = eol ? (size_t)(eol - line) : strlen(line);
+        if (!memmem(line, len, "ct mark", 7)) {
+            const char *hp = NULL, *p = line;
+            size_t rem = len;
+            const char *next;
+            while ((next = memmem(p, rem, "# handle ", 9)) != NULL) {
+                hp = next;
+                rem -= (size_t)(next + 9 - p);
+                p = next + 9;
+            }
+            n_match++;
+            if (hp && handles && fill < cap) {
+                uint64_t h = strtoull(hp + 9, NULL, 10);
+                if (h) handles[fill++] = h;
+            }
+        }
+        line = eol ? eol + 1 : line + len;
+    }
+    if (n_fill) *n_fill = fill;
+    return n_match;
+}
+
 static uint64_t ct_rule_handle(struct nft_ctx *ctx) {
     nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_HANDLE);
     nft_ctx_buffer_output(ctx);
@@ -520,42 +562,99 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         strstr(probe_out, GATE_LIVE_COMMENT) != NULL);
 
     /*
-     * An unconditional `ct state established,related accept` defeats
-     * revocation outright: it fires before the gate can consult
-     * live_sessions, so a closed session's flows keep passing. The module
-     * shipped exactly that rule before this change, so a host upgraded
-     * mid-boot still has one in the chain. Find it and delete it.
+     * An unconditional `ct state established,related accept` nullifies the
+     * gate: the gate's arms decline a revoked flow (mark set, id not live),
+     * but evaluation then continues and the unconditional rule accepts it.
+     * The module shipped exactly that rule before the gate, and its
+     * probe-then-add pattern raced concurrent opens the same way the
+     * gate's does (above), so an upgraded host that raced can hold several
+     * copies. One survivor is enough: sweep them all, not just the first.
      *
      * Matched by absence of "ct mark": the gate rules carry the same
      * ct-state prefix, so a substring test on the prefix alone would also
      * match them and delete the gate instead.
+     *
+     * The cap is one concurrent-open burst's worth. If a chain somehow
+     * holds more, the next session open sweeps the remainder: the probe
+     * runs on every open.
      */
-    uint64_t legacy_handle = 0;
-    if (probe_rc == 0 && probe_out) {
-        const char *line = probe_out;
-        while ((line = strstr(line, "ct state established,related")) != NULL) {
-            const char *eol = strchr(line, '\n');
-            size_t len = eol ? (size_t)(eol - line) : strlen(line);
-            if (!memmem(line, len, "ct mark", 7)) {
-                const char *hp = memmem(line, len, "# handle ", 9);
-                if (hp) legacy_handle = strtoull(hp + 9, NULL, 10);
-                break;
-            }
-            line = eol ? eol + 1 : line + len;
-        }
-    }
+    uint64_t legacy_handles[8];
+    size_t n_legacy = 0;
+    size_t n_match = scan_legacy_accepts(probe_rc == 0 ? probe_out : NULL,
+                                         legacy_handles,
+                                         sizeof(legacy_handles) /
+                                         sizeof(legacy_handles[0]),
+                                         &n_legacy);
     nft_ctx_unbuffer_output(ctx);
     nft_ctx_output_set_flags(ctx, 0);
 
-    char legacy_line[96] = "";
-    if (legacy_handle) {
-        pam_syslog(pamh, LOG_WARNING,
-                   "authnft: removing an unconditional established-accept "
-                   "(handle %" PRIu64 ") that would defeat session revocation",
-                   legacy_handle);
-        snprintf(legacy_line, sizeof(legacy_line),
-                 "delete rule inet " TABLE_NAME " filter handle %" PRIu64 "\n",
-                 legacy_handle);
+    /*
+     * The sweep is shared-chain repair, not per-session state, so it runs
+     * as its own transaction and is judged by its postcondition. Two
+     * concurrent opens on an upgraded host can both probe the same
+     * handles; the loser's delete then fails with ENOENT. That is not a
+     * failure of the postcondition — the rules are gone — so on any sweep
+     * error, re-probe: if no legacy rule remains, a concurrent open swept
+     * it and this open proceeds. If one remains, the gate cannot be
+     * trusted and the open fails closed.
+     */
+    if (n_match != n_legacy) {
+        /* A matching line whose handle did not parse. With the HANDLE
+         * flag set libnftables always prints one, so this is unreachable
+         * short of a broken library; if it happens, the rule cannot be
+         * deleted and the gate cannot be trusted. Deny. */
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: %zu unconditional established-accept(s) with no "
+                   "parseable handle; denying rather than opening a session "
+                   "they would make irrevocable", n_match - n_legacy);
+        free(frag_buf);
+        nft_ctx_free(ctx);
+        return PAM_SERVICE_ERR;
+    }
+    if (n_legacy) {
+        char legacy_cmd[8 * 64] = "";
+        size_t legacy_off = 0;
+        for (size_t i = 0; i < n_legacy; i++) {
+            pam_syslog(pamh, LOG_WARNING,
+                       "authnft: removing an unconditional established-accept "
+                       "(handle %" PRIu64 ") that would defeat session revocation",
+                       legacy_handles[i]);
+            int n = snprintf(legacy_cmd + legacy_off,
+                             sizeof(legacy_cmd) - legacy_off,
+                             "delete rule inet " TABLE_NAME " filter handle %" PRIu64 "\n",
+                             legacy_handles[i]);
+            if (n < 0 || (size_t)n >= sizeof(legacy_cmd) - legacy_off)
+                break;
+            legacy_off += (size_t)n;
+        }
+        if (nft_run_cmd_from_buffer(ctx, legacy_cmd) != 0) {
+            nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_HANDLE);
+            nft_ctx_buffer_output(ctx);
+            int rp_rc = nft_run_cmd_from_buffer(ctx,
+                "list chain inet " TABLE_NAME " filter");
+            const char *rp_out = nft_ctx_get_output_buffer(ctx);
+            size_t left = scan_legacy_accepts(rp_rc == 0 ? rp_out : NULL,
+                                              NULL, 0, NULL);
+            /* The concurrent winner's call 1 installed the gate too;
+             * refresh so this open does not insert a duplicate pair. */
+            gate_present = (rp_rc == 0 && rp_out &&
+                strstr(rp_out, GATE_LIVE_COMMENT) != NULL);
+            nft_ctx_unbuffer_output(ctx);
+            nft_ctx_output_set_flags(ctx, 0);
+            if (rp_rc != 0 || left > 0) {
+                pam_syslog(pamh, LOG_ERR,
+                           "authnft: could not remove the unconditional "
+                           "established-accept (%zu left); denying rather "
+                           "than opening a session it would make "
+                           "irrevocable", left);
+                free(frag_buf);
+                nft_ctx_free(ctx);
+                return PAM_SERVICE_ERR;
+            }
+            pam_syslog(pamh, LOG_NOTICE,
+                       "authnft: legacy established-accept already removed "
+                       "by a concurrent session open");
+        }
     }
 
     /*
@@ -593,7 +692,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
                   "add table inet %s\n"
                   "add chain inet %s filter { type filter hook input priority filter - 1; policy accept; }\n"
                   "add set inet %s live_sessions { type mark; }\n"
-                  "%s%s"
+                  "%s"
                   "add chain inet %s %s\n"
                   "add rule inet %s %s ct state new ct mark set ct mark and "
                   AUTHNFT_MARK_ADMIN_STR " or 0x%08x\n"
@@ -605,7 +704,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
                   TABLE_NAME,
                   TABLE_NAME,
                   TABLE_NAME,
-                  legacy_line, ct_rule_line,
+                  ct_rule_line,
                   TABLE_NAME, sd->chain_name,
                   TABLE_NAME, sd->chain_name, sd->session_mark,
                   TABLE_NAME, sd->session_mark,
@@ -618,7 +717,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
                   "add table inet %s\n"
                   "add chain inet %s filter { type filter hook input priority filter - 1; policy accept; }\n"
                   "add set inet %s live_sessions { type mark; }\n"
-                  "%s%s"
+                  "%s"
                   "add chain inet %s %s\n"
                   "add rule inet %s %s ct state new ct mark set ct mark and "
                   AUTHNFT_MARK_ADMIN_STR " or 0x%08x\n"
@@ -630,7 +729,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
                   TABLE_NAME,
                   TABLE_NAME,
                   TABLE_NAME,
-                  legacy_line, ct_rule_line,
+                  ct_rule_line,
                   TABLE_NAME, sd->chain_name,
                   TABLE_NAME, sd->chain_name, sd->session_mark,
                   TABLE_NAME, sd->session_mark,

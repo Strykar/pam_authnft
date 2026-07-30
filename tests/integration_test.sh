@@ -1222,4 +1222,55 @@ fi
 pass "10.27: id $TAG_1027 tagged and live during the session; the second session's id was added and revoked at close (mask $MASK_1027 preserves admin bits)"
 nft delete table inet authnft 2>/dev/null || true
 
+# 10.28: every legacy established-accept is swept, not just the first (#113
+# follow-up). The pre-gate module added its unconditional established-accept
+# with probe-then-add, which races concurrent opens, so an upgraded host can
+# hold several. One survivor nullifies the gate: the gate's arms decline a
+# revoked flow and evaluation continues into the survivor's accept;
+# the sweep has to take them all in one open.
+printf "${YELLOW}10.28: an upgraded host's duplicate established-accepts are all swept${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+# The chain as the pre-gate module left it after a concurrent-open race:
+# the shared skeleton plus TWO unconditional established-accepts.
+nft -f - <<'NFT' || fail "10.28: could not seed the upgraded-host chain"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add rule inet authnft filter ct state established,related accept
+add rule inet authnft filter ct state established,related accept
+NFT
+
+# Falsifier first: both legacy rules really are in the chain, so "zero left
+# after the open" cannot be true vacuously.
+legacy_1028() { # grep -c exits 1 at zero matches; 0 is an expected count here
+    nft list chain inet authnft filter 2>/dev/null \
+        | { grep 'ct state established,related' || true; } \
+        | { grep -vc 'ct mark' || true; }
+}
+L_BEFORE=$(legacy_1028)
+[[ "$L_BEFORE" -eq 2 ]] || fail "10.28: seeded $L_BEFORE legacy rules, expected 2"
+
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.28: session did not open on the upgraded-host chain"
+fi
+
+L_AFTER=$(legacy_1028)
+if [[ "$L_AFTER" -ne 0 ]]; then
+    nft list chain inet authnft filter >&2
+    fail "10.28: $L_AFTER unconditional established-accept(s) survived the open — the gate is defeated on upgraded hosts"
+fi
+
+# And the gate itself must be standing where the legacies were: both arms,
+# ahead of the session jump.
+G_1028=$(nft list chain inet authnft filter 2>/dev/null | grep -c 'authnft-est-' || true)
+[[ "$G_1028" -eq 2 ]] || { nft list chain inet authnft filter >&2; \
+    fail "10.28: expected both gate arms after the sweep, found $G_1028"; }
+
+pass "10.28: both duplicate established-accepts swept in one open, gate installed ($L_BEFORE -> $L_AFTER)"
+nft delete table inet authnft 2>/dev/null || true
+
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"
