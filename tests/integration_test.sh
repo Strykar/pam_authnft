@@ -1311,6 +1311,31 @@ fi
 pass "10.29: gate at $GATE_1029 and jump at $JUMP_1029, both above the boot-restored deny at $DENY_1029"
 nft delete table inet authnft 2>/dev/null || true
 
+# 10.30: the documented sandbox bypass still opens a session. The mark is
+# normally allocated in the sandboxed child before the seccomp filter goes
+# on; the AUTHNFT_NO_SANDBOX branch skipped that step, so setup saw mark 0
+# and denied every managed login under the bypass. The valgrind arm of the
+# audit tier runs this exact combination but judges only leaks, which is
+# how the denial hid inside a passing audit.
+printf "${YELLOW}10.30: AUTHNFT_NO_SANDBOX bypass allocates a session mark${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+if ! env AUTHNFT_NO_SANDBOX=1 pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" \
+        open_session >/dev/null 2>&1; then
+    fail "10.30: session did not open under AUTHNFT_NO_SANDBOX=1"
+fi
+LIVE_1030=$(nft list set inet authnft live_sessions 2>/dev/null \
+    | grep -oP 'elements = \{ \K[^}]*' | tr -d ' ' || true)
+[[ -n "$LIVE_1030" ]] || { nft list table inet authnft >&2; \
+    fail "10.30: live_sessions is empty — the bypass path allocated no mark"; }
+
+pass "10.30: bypass session opened with id $LIVE_1030 live"
+nft delete table inet authnft 2>/dev/null || true
+
 # 10.31: the ADMIN_GUIDE reboot recipe, run literally, in both orders. The
 # recipe is extracted from the doc rather than restated here, so a doc edit
 # that breaks its syntax (the '"..."' shell idiom pasted into the nft -f
