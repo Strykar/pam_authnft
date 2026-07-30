@@ -666,16 +666,25 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
      * Both arms mask before comparing. Testing against a bare 0 would treat
      * any flow an administrator's own rule had marked as unsessioned and
      * hand it a free accept (I6).
+     *
+     * Inserted, not added. The chain can predate the gate with site rules
+     * already in it: ADMIN_GUIDE has the boot loader restore the site deny
+     * before the first session opens. `add` appends the gate behind that
+     * deny, and the session jump positioned after the gate lands behind it
+     * too, shadowing every session (the E10 arm). On a fresh chain insert
+     * and add coincide. Sequential inserts stack at the head in reverse,
+     * so the live arm goes first in the buffer to keep the chain reading
+     * unsessioned-then-live.
      */
     const char *ct_rule_line = gate_present
         ? ""
         : "add set inet " TABLE_NAME " live_sessions { type mark; }\n"
-          "add rule inet " TABLE_NAME " filter ct state established,related "
-          "ct mark and " AUTHNFT_MARK_MASK_STR " 0x0 accept comment \""
-          GATE_UNSESSIONED_COMMENT "\"\n"
-          "add rule inet " TABLE_NAME " filter ct state established,related "
+          "insert rule inet " TABLE_NAME " filter ct state established,related "
           "ct mark and " AUTHNFT_MARK_MASK_STR " @live_sessions accept comment \""
-          GATE_LIVE_COMMENT "\"\n";
+          GATE_LIVE_COMMENT "\"\n"
+          "insert rule inet " TABLE_NAME " filter ct state established,related "
+          "ct mark and " AUTHNFT_MARK_MASK_STR " 0x0 accept comment \""
+          GATE_UNSESSIONED_COMMENT "\"\n";
 
     /*
      * Call 1: infrastructure + per-session chain/sets + element.

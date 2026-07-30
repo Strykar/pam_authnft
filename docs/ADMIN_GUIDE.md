@@ -261,14 +261,29 @@ taught to honour the module's decision rather than run a blanket drop
 after it. There is no mechanism for that in this release; track #114.
 
 **After a reboot** the `inet authnft` table does not exist until the
-first session opens, so a deny placed inside it does not survive. Re-apply
-it from whatever loads your ruleset, tolerating the table's absence:
+first session opens, so a deny placed inside it does not survive. Have
+whatever loads your ruleset create the table and place the deny itself.
+`add table` and `add chain` are idempotent, and the chain declaration
+below is the module's own, so this is safe whether the loader runs
+before or after the first session:
 
 ```
-nft list table inet authnft >/dev/null 2>&1 && \
-    nft add rule inet authnft filter tcp dport { 5432, 6379 } counter drop \
-        comment '"site-default-deny"'
+nft -f - <<'EOF'
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add rule inet authnft filter tcp dport { 5432, 6379 } counter drop comment "site-default-deny"
+EOF
 ```
+
+(The comment is quoted for nft's file syntax, not the shell's: this block
+is read by `nft -f`, so the `'"..."'` idiom used on a command line above
+would be a syntax error here and the whole batch would install nothing.)
+
+When the loader runs first, the module inserts its gate and every session
+jump above the deny at the first open [E10, E11]. When a session gets
+there first, the loader's deny appends after the existing jumps, which is
+the ordinary case above [E1, E5]; integration case 10.31 runs this exact
+block in both orders against the real module.
 
 ### nftables state after session open
 
