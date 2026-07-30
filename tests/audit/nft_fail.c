@@ -48,6 +48,7 @@ static const char *(*real_geterr)(void *);
  * it proves nothing. */
 static int fail_once_done;
 static int fake_exists_err;
+static int race_legacy_done;
 
 int nft_run_cmd_from_buffer(void *ctx, const char *buf)
 {
@@ -59,6 +60,23 @@ int nft_run_cmd_from_buffer(void *ctx, const char *buf)
             fprintf(stderr, "[nft_fail] failing command containing '%s'\n",
                     fail_on);
         return 1; /* libnftables returns non-zero on failure */
+    }
+    /* AUTHNFT_NFT_RACE_LEGACY=1 stages the legacy sweep losing its race:
+     * another open deleted the same handles between this open's probe and
+     * its delete. Run the delete for real, then report failure — the
+     * rules are gone and the call failed, exactly what the loser sees.
+     * One-shot: the first matching buffer is the sweep's (it runs before
+     * call 1), and cleanup's later delete-by-handle of the jump rule must
+     * pass through untouched. */
+    const char *race = getenv("AUTHNFT_NFT_RACE_LEGACY");
+    if (race && *race && !race_legacy_done && buf &&
+        strstr(buf, "delete rule inet authnft filter handle")) {
+        race_legacy_done = 1;
+        (void)real_run(ctx, buf);
+        if (getenv("AUTHNFT_NFT_FAIL_VERBOSE"))
+            fprintf(stderr, "[nft_fail] raced the legacy delete: ran it, "
+                    "reporting failure\n");
+        return 1;
     }
     /* Call 1 is the only command that creates the per-session sets. */
     const char *once = getenv("AUTHNFT_NFT_FAIL_ONCE");

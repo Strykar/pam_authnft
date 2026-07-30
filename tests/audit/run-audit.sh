@@ -98,8 +98,9 @@ export AUTHNFT_NO_SANDBOX=1
 #   $5 extraenv optional extra env for the interposer (e.g. AUTHNFT_NFT_FAIL_ON=jump)
 # The sanitizer owns the verdict (non-zero exit on a definite leak / UB).
 run_scen() {
-    local label="$1" scen="$2" scope="$3" preload="${4:-}" extra="${5:-}"
+    local label="$1" scen="$2" scope="$3" preload="${4:-}" extra="${5:-}" seed="${6:-}"
     nft delete table inet authnft 2>/dev/null || true
+    [ -n "$seed" ] && "$seed"
     note "fault scenario: $label (scope=$scope)  (ASan + UBSan + LSan)"
     local rc=0 pre="" out="/tmp/scen-$label.out"
     # The driver is ASan-instrumented; ASan requires its runtime to come
@@ -134,6 +135,9 @@ run_scen() {
 #   nftfail      call-1-failure return (bare: the cgroup is absent)
 #   call2fail    call-2 (jump-rule) failure return, via the nft interposer
 #   handleparse  handle-parse failure return, via the nft interposer
+#   legacyrace   the legacy sweep loses its delete race to a concurrent
+#                open (interposer deletes for real, reports failure); the
+#                re-probe must let the login proceed
 #   selfheal     PID-recycle onto a leaked session's names: the interposer
 #                fails call 1 once as "exists", the stale state is reaped, and
 #                the retry must succeed (else the user self-locks out)
@@ -144,6 +148,19 @@ run_scen nftfail     nftfail  no
 run_scen call2fail   happy    yes nft_fail.so "AUTHNFT_NFT_FAIL_ON=jump"
 run_scen handleparse happy    yes nft_fail.so "AUTHNFT_NFT_CORRUPT_HANDLE=1"
 run_scen selfheal    selfheal yes nft_fail.so "AUTHNFT_NFT_FAIL_ONCE=1"
+
+# The legacy sweep's raced loser: two legacy established-accepts are
+# seeded, the interposer deletes them for real and reports failure, and
+# the sweep must re-probe and proceed instead of denying the login.
+seed_legacy() {
+    nft -f - <<'NFT'
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add rule inet authnft filter ct state established,related accept
+add rule inet authnft filter ct state established,related accept
+NFT
+}
+run_scen legacyrace  legacyrace yes nft_fail.so "AUTHNFT_NFT_RACE_LEGACY=1" seed_legacy
 
 # --- real lifecycle under valgrind (production .so via pamtester) ---
 # The verdict is valgrind's leak report, NOT pamtester's own exit code:
