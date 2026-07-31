@@ -182,9 +182,10 @@ heard about the teardown (issue #103).
 Flows the module never admitted are untagged and unaffected, which is
 what carries the SSH connection the login arrived on. Ids are never
 reused, since a recycled id would resurrect the flows its previous holder
-revoked. Cases D1 to D3 and I1 to I6 of `make test-packet-flow` pin the
-behaviour, and integration case 10.27 exercises the id lifecycle through
-the module.
+revoked. Cases D1 to D4 and I1 to I6 of `make test-packet-flow` pin the
+behaviour (D4 isolates the conntrack-flush fallback for sessions that
+never received an id), and integration case 10.27 exercises the id
+lifecycle through the module.
 
 The module only ever adds `accept` rules, so it grants; it never denies.
 Whatever denies is the site's, and it has to sit somewhere the module's

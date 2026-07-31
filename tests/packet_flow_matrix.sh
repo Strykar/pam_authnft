@@ -38,11 +38,11 @@ SCOPE_B=authnft-flow-bob
 # ---------------------------------------------------------------- outer
 if [[ "${1:-}" != "--inner" ]]; then
     [[ $EUID -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
-    # conntrack(8) is required, not optional: D3 is the only case that
-    # shows the flush revoking an established flow, and ASSURANCE_CASE
-    # C3 and CONCEPTS both cite D1 to D3 as the pin for the revocation
-    # bound. Skipping it while still reporting success would leave two
-    # shipped docs citing an arm that never ran.
+    # conntrack(8) is required, not optional: D4 is the only case where a
+    # conntrack flush is the sole revoker (the documented fallback for a
+    # session that never got an id), and ASSURANCE_CASE and CONCEPTS cite
+    # the D arms as the revocation pin. Skipping it while still reporting
+    # success would leave shipped docs citing an arm that never ran.
     for t in ip nft socat ss systemd-run systemctl conntrack; do
         command -v "$t" >/dev/null 2>&1 || { echo "missing required tool: $t" >&2; exit 1; }
     done
@@ -239,6 +239,7 @@ jump_rule_after_ct() { # <session-tag>
     local h
     h=$(nft -a list chain inet authnft filter | awk '/ct-live/{print $NF}')
     [[ -n "$h" ]] || die "no ct rule to position after (session $1)"
+    [[ $(wc -w <<<"$h") -eq 1 ]] || die "ct-live matched more than one rule; refusing to guess a handle"
     nft add rule inet authnft filter position "$h" jump "session_$1" \
         || die "positioned jump for $1"
 }
@@ -255,6 +256,7 @@ module_down() { # <session-tag>
     local tag="$1" h
     h=$(nft -a list chain inet authnft filter | awk "/jump session_$tag/{print \$NF}")
     [[ -n "$h" ]] || die "module_down $tag: no jump rule to delete (session was never up?)"
+    [[ $(wc -w <<<"$h") -eq 1 ]] || die "module_down $tag: more than one jump rule matched; refusing to guess"
     nft -f - <<RULES || die "module_down $tag: teardown transaction failed"
 delete rule inet authnft filter handle $h
 flush chain inet authnft session_$tag
@@ -268,23 +270,37 @@ RULES
     return 0
 }
 
-# A PASS says a payload round-tripped. It does not say which rule let it
-# through, and on a policy-accept chain "nothing was enforcing" produces the
-# same PASS as "the intended rule fired". admitted_by asserts the counter on
-# the rule that was supposed to admit it actually moved.
-admitted_by() { # <case-id> <rule-comment> <count before>
-    local id="$1" comment="$2" before="$3" after
+# A PASS says a payload round-tripped; a BLOCK says it did not. Neither says
+# which rule did it. These two tie the verdict to the counter on the rule the
+# case is about, and fail the run when the number disagrees with the story.
+# A printed control nobody checks is decoration.
+counter_moved() { # <case-id> <rule-comment> <count-before> <what it proves>
+    local id="$1" comment="$2" before="${3:-0}" why="$4" after
     after=$(cnt "$comment"); after=${after:-0}; before=${before:-0}
     if [[ "$after" -gt "$before" ]]; then
-        printf "       %s admitted by '%s' (%s -> %s)\n" "$id" "$comment" "$before" "$after"
+        printf "       %s control: '%s' %s -> %s (%s)\n" "$id" "$comment" "$before" "$after" "$why"
     else
-        printf "${RED}[FAIL]${RESET} %s: traffic passed but '%s' never counted (%s -> %s) — nothing was enforcing\n" \
-            "$id" "$comment" "$before" "$after" >&2
+        printf "${RED}[FAIL]${RESET} %s control: '%s' never moved (%s -> %s): %s\n" \
+            "$id" "$comment" "$before" "$after" "$why" >&2
         RC=1
     fi
 }
+counter_static() { # <case-id> <rule-comment> <what it proves>
+    local id="$1" comment="$2" why="$3" val
+    val=$(cnt "$comment"); val=${val:-0}
+    if [[ "$val" -eq 0 ]]; then
+        printf "       %s control: '%s' stayed 0 (%s)\n" "$id" "$comment" "$why"
+    else
+        printf "${RED}[FAIL]${RESET} %s control: '%s' counted %s: %s\n" \
+            "$id" "$comment" "$val" "$why" >&2
+        RC=1
+    fi
+}
+admitted_by() { counter_moved "$1" "$2" "$3" "admitted by the intended rule, not by accident"; }
 
-cnt() { nft list table inet authnft 2>/dev/null | grep "$1" | grep -oP 'packets \K[0-9]+' | head -1; }
+# Anchored on the full comment: a bare substring match let cnt sess-a also
+# hit the sess-a-deny line, with listing order deciding which one it read.
+cnt() { nft list table inet authnft 2>/dev/null | grep -F "comment \"$1\"" | grep -oP 'packets \K[0-9]+' | head -1; }
 
 # Discard anything already queued on the socket before probing it. Without
 # this a reply that was in flight when the rules changed is read by the NEXT
@@ -311,15 +327,9 @@ check A3 BLOCK "$(verdict $BAD_SRC $SVC)" "allowed port, source not in the sessi
 
 # The negative cases above must not pass vacuously: the deny counters prove
 # the packets arrived and were dropped rather than never being sent.
-D_ALT=$(cnt "deny-$ALT"); D_SVC=$(cnt "deny-$SVC")
-if [[ -z "$D_ALT" || "$D_ALT" -eq 0 ]]; then
-    printf "${RED}[FAIL]${RESET} A2 arrival control: deny counter for %s never moved\n" "$ALT"; RC=1
-fi
-if [[ -z "$D_SVC" || "$D_SVC" -eq 0 ]]; then
-    printf "${RED}[FAIL]${RESET} A3 arrival control: deny counter for %s never moved\n" "$SVC"; RC=1
-fi
-printf "       arrival controls: deny-%s=%s deny-%s=%s sess-a=%s\n" \
-    "$ALT" "${D_ALT:-0}" "$SVC" "${D_SVC:-0}" "$(cnt sess-a)"
+counter_moved A2 "deny-$ALT" 0 "the A2 packets arrived and were dropped, not never sent"
+counter_moved A3 "deny-$SVC" 0 "the A3 packets arrived and were dropped, not never sent"
+printf "       sess-a=%s\n" "$(cnt sess-a)"
 
 # ======================================================================
 note "B. Isolation: one session's rules must not admit another's traffic"
@@ -403,9 +413,9 @@ if read -t 3 -r _ <&5; then C3=PASS; fi
 check C3 BLOCK "$C3" "flow that predates conntrack tracking, ct rule added after"
 # The ct counter is not zero here: conntrack picks the flow up mid-stream and
 # the reply direction matches established. The client-to-server data packets
-# still land in the deny. Report both numbers rather than a story about why.
-printf "       ct-accept=%s deny-%s=%s (rule present, data packets still dropped)\n" \
-    "$(cnt ct-accept)" "$ALT" "$(cnt "deny-$ALT")"
+# still land in the deny.
+counter_moved C3 "deny-$ALT" 0 "the data packets landed in the deny despite the ct rule"
+printf "       ct-accept=%s (nonzero: conntrack picks the flow up mid-stream in the reply direction)\n" "$(cnt ct-accept)"
 exec 5<&-
 
 # ======================================================================
@@ -431,13 +441,38 @@ if read -t 3 -r _ <&4; then D1=PASS; else D1=BLOCK; fi
 check D1 BLOCK "$D1" "flow admitted during the session, revoked at close_session"
 check D2 BLOCK "$(verdict $OK_SRC $SVC)" "new flow after close_session"
 
-# D3 predates the gate: a conntrack flush by source address revokes the
-# flow too, which is what authpf does. Kept because it is still true and
-# still the fallback when no id was ever allocated.
+# D3 predates the gate and is now overdetermined: by the time the flush
+# runs, the gate has already revoked this flow, so this BLOCK cannot be
+# credited to conntrack -D. Kept as belt-and-braces (flush after close
+# leaves the flow just as dead); D4 is where the flush earns its keep.
 conntrack -D -s "$OK_SRC" >/dev/null 2>&1
 drain 4; printf 'three\n' >&4
 if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
 check D3 BLOCK "$D3" "same flow after a conntrack flush by source address"
+exec 4<&-
+
+# D4: the fallback on its own. A session that never got an id leaves an
+# untagged flow the gate's unsessioned arm carries forever; the documented
+# remedy is a conntrack flush by source address (what authpf does). D1-D3
+# can no longer show that: the gate revokes first. Here nothing but the
+# flush ever revokes: no session, no tag, gate present before the flow
+# opens (C3's precondition), deny added after it establishes.
+table_down
+nft -f - <<RULES || die "D4 setup"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+RULES
+ct_rule
+exec 4<>/dev/tcp/127.0.0.1/$ALT || die "D4: untagged flow would not open"
+printf 'one\n' >&4; read -t 3 -r _ <&4 || die "D4: untagged flow never worked"
+site_deny "$ALT"
+drain 4; printf 'two\n' >&4
+read -t 3 -r _ <&4 || die "D4: untagged flow did not survive the deny; the gate is broken in an arrangement C1 does not cover"
+conntrack -D -s "$OK_SRC" >/dev/null 2>&1
+drain 4; printf 'three\n' >&4
+if read -t 3 -r _ <&4; then D4=PASS; else D4=BLOCK; fi
+check D4 BLOCK "$D4" "untagged flow revoked by a conntrack flush alone (the no-id fallback)"
+counter_moved D4 "deny-$ALT" 0 "the post-flush packets arrived and were dropped"
 exec 4<&-
 
 # ======================================================================
@@ -448,13 +483,13 @@ check E1 PASS  "$(verdict $OK_SRC $SVC)" "deny appended to the shared chain AFTE
 
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule a
 check E2 BLOCK "$(verdict $OK_SRC $SVC)" "deny added BEFORE the jump: session chain shadowed"
-printf "       shadow control: sess-a=%s (0 proves the jump was never reached)\n" "$(cnt sess-a)"
+counter_static E2 sess-a "the jump was never reached"
 
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule a
 nft add chain inet authnft sitedeny '{ type filter hook input priority filter; policy drop; }'
 nft add rule inet authnft sitedeny ct state established,related counter accept
 check E3 BLOCK "$(verdict $OK_SRC $SVC)" "site deny as a separate base chain at priority filter"
-printf "       shadow control: sess-a=%s (>0 proves the module accepted and was overruled)\n" "$(cnt sess-a)"
+counter_moved E3 sess-a 0 "the module accepted and was overruled afterwards"
 
 # E1 is only true until the next login. The module APPENDS its jump rule, so
 # a session opened after the site deny lands behind it and is never reached.
@@ -475,7 +510,7 @@ add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4
 RULES
 jump_rule b     # appended, so it lands AFTER the deny
 check E4 BLOCK "$(verdict $OK_SRC 19102)" "session opened after the site deny: its jump is shadowed"
-printf "       shadow control: sess-b=%s (0 proves bob's jump was never reached)\n" "$(cnt sess-b)"
+counter_static E4 sess-b "bob's jump was never reached"
 # The control that makes E4 mean something: alice, whose jump predates the
 # deny, is unaffected. Without this the run cannot tell "bob is shadowed"
 # from "the whole table is broken".
@@ -493,7 +528,7 @@ add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4
 RULES
 jump_rule_after_ct b
 check E6 PASS "$(verdict $OK_SRC 19102)" "same session, jump positioned after the ct rule (#105 fix)"
-printf "       sess-b=%s (>0 proves bob's jump was reached this time)\n" "$(cnt sess-b)"
+counter_moved E6 sess-b 0 "bob's jump was reached this time"
 # And the deny still denies: a source in nobody's set must not ride in on
 # the reordering. Without this E6 could pass by breaking enforcement.
 check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with the jump positioned (E6 control)"
@@ -506,7 +541,7 @@ check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with the jump posi
 # that appends behind the deny. E10 pins that order.
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule_after_ct a
 check E8 PASS "$(verdict $OK_SRC $SVC)" "deny placed BEFORE any session, jump positioned after the ct rule"
-printf "       sess-a=%s (>0 proves the jump ran ahead of a deny that predates it)\n" "$(cnt sess-a)"
+counter_moved E8 sess-a 0 "the jump ran ahead of a deny that predates it"
 
 # Why the jump goes after the ct rule and not at the head of the chain.
 # With jumps first, every packet of every established flow walks every live
@@ -554,11 +589,7 @@ admitted_by E10 sess-a "$E10_BEFORE"
 check E11 BLOCK "$(verdict $BAD_SRC $SVC)" "the boot-restored deny still denies (E10 control)"
 # Arrival control, same contract as A2/A3: a BLOCK is only evidence if the
 # packet reached the deny. A connect that never sent a SYN reports BLOCK too.
-E11_DENY=$(cnt "deny-$SVC")
-if [[ -z "$E11_DENY" || "$E11_DENY" -eq 0 ]]; then
-    printf "${RED}[FAIL]${RESET} E11 arrival control: deny counter for %s never moved\n" "$SVC"; RC=1
-fi
-printf "       arrival control: deny-%s=%s (the deny is live, not bypassed)\n" "$SVC" "${E11_DENY:-0}"
+counter_moved E11 "deny-$SVC" 0 "the boot-restored deny is live, not bypassed"
 
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
@@ -573,20 +604,25 @@ F1_BEFORE=$(cnt sess-a); F1_BEFORE=${F1_BEFORE:-0}
 check F1 PASS  "$(verdict $OK_SRC $SVC)" "fragment allow rule, no site deny in play"
 admitted_by F1 sess-a "$F1_BEFORE"
 check F2 BLOCK "$(verdict $OK_SRC $ALT)" "fragment deny rule inside the session chain"
-printf "       fragment deny counter: %s\n" "$(cnt sess-a-deny)"
+counter_moved F2 sess-a-deny 0 "the fragment's own deny did the dropping"
 
 # And the same denied port once the session closes: the deny goes with it.
 module_down a
 # F3 passes because the deny went with the session, not because the traffic
-# was never sent or the table vanished. The rule's counter is unreachable
-# once its chain is gone, which is the proof; G2 separately pins that the
-# shared chain survived, so "everything vanished" cannot produce this pass.
+# was never sent or the table vanished. Two controls, both in THIS table
+# instance: the deny rule must be gone, and the shared chain must still be
+# standing. (An earlier draft pointed at G2 for the second half, but G2 runs
+# on a rebuilt table and cannot vouch for this one.)
 check F3 PASS "$(verdict $OK_SRC $ALT)" "fragment deny does not outlive the session"
 if [[ -n "$(cnt sess-a-deny)" ]]; then
     printf "${RED}[FAIL]${RESET} F3: the fragment deny rule is still present after close\n" >&2
     RC=1
 else
     printf "       F3 control: the fragment deny rule is gone, not merely unmatched\n"
+fi
+if [[ -z "$(cnt ct-accept)" ]]; then
+    printf "${RED}[FAIL]${RESET} F3 control: ct-accept is gone too; the whole table vanished with the session\n" >&2
+    RC=1
 fi
 
 # ======================================================================
@@ -628,35 +664,34 @@ check G3 PASS  "$([[ $G_FRAG -gt 0 ]] && echo PASS || echo BLOCK)" "chain a frag
 check G4 PASS  "$([[ $G_SHARED -gt 0 ]] && echo PASS || echo BLOCK)" "rule a fragment put in the shared chain survives close"
 # And the wire consequence of G4: that leftover rule still denies traffic
 # belonging to nobody's session, on a port the closed session never owned.
+G5_BEFORE=$(cnt frag-shared-deny); G5_BEFORE=${G5_BEFORE:-0}
 check G5 BLOCK "$(verdict $OK_SRC 19102)" "leftover shared-chain fragment rule still drops after close"
+counter_moved G5 frag-shared-deny "$G5_BEFORE" "the leftover fragment rule did the dropping"
 exec 6<&-
 
 # ======================================================================
-note "I. Conntrack revocation: the ct mark gate proposed for #103"
+note "I. Conntrack revocation: the ct mark gate shipped for #103"
 # ======================================================================
-# D1 is the gap: a flow admitted during a session keeps passing after close,
-# because the shared established-accept fires before any session jump and
-# conntrack never hears about the teardown.
-#
-# The proposed shape. Each session tags new connections with an id in the low
-# 24 bits of ct mark. The shared established-accept is split in two: untagged
-# flows (the SSH connection, everything the module does not govern) accept
-# unconditionally; tagged flows accept only while their id is in a live
-# sessions set. Close deletes the element, so the next packet of a revoked
-# flow falls through to the site deny.
-#
-# None of this is in the module. These arms decide whether it is worth
-# building, against the real chain layout rather than a synthetic one, and
-# with a real pre-session flow standing in for the SSH connection, because
-# breaking that locks everyone out of the host.
+# The ct mark gate, isolated. The module ships this since 9c224ad (#103):
+# each session tags its new connections with an id in the low 24 bits of
+# ct mark, the shared established-accept is split into an unsessioned arm
+# and a live-id arm, and close deletes the id so a revoked flow's next
+# packet falls through to the site deny. Section D proves the module-shaped
+# build revokes; these arms pin the gate's own semantics: which flows the
+# close kills (I2), which it must never touch (I3), and why ids must not
+# repeat (I4, I5), with a real pre-session flow standing in for the SSH
+# connection because breaking that locks everyone out of the host.
 SESS_MASK=0x00ffffff     # the slice a session id lives in
 ADMIN_MASK=0xff000000    # bits the admin keeps
 ADMIN_BITS=0xab000000    # what an admin rule puts there first
 CTM_A=0x000001
 CTM_B=0x000002
 
-# The shared chain, with the established-accept split. Order matches the
-# module: jumps are inserted at the head, everything else appended.
+# Builds the gate plus one tagged session. The jump is head-inserted, which
+# is the module's no-gate fallback path (nft_handler.c positions it after
+# the est-live rule when it can); every verdict below is placement-
+# independent, and the module's real placement is what sections D and E
+# exercise.
 ctmark_up() { # <session-tag> <cgroup> <src> <session-id>
     local tag="$1" cg="$2" src="$3" sid="$4"
     nft -f - <<RULES || die "ct mark gate setup for $tag"
@@ -713,13 +748,20 @@ site_deny "$SVC"; site_deny "$ALT"
 
 hold_open 8 "$SVC" || die "I: session flow would not open"
 printf 'one\n' >&8; read -t 3 -r _ <&8 || die "I: session flow never worked"
+# The observation is the hold_open and exchange above: both die on failure,
+# so reaching this line IS the pass. Recorded so the matrix counts it.
 check I1 PASS "PASS" "session flow admitted while the session is live (control)"
 # Earlier sections leave a dozen conntrack entries on this port in TIME_WAIT
 # and SYN_SENT. Filtering to the single ESTABLISHED one is what makes this
 # reproducible; head -1 over all of them returned a different mark per run.
+# UNREPLIED is filtered too: a socket closed while a deny held its port is
+# orphaned with unacked data and retransmits for minutes, and each
+# retransmit after a conntrack flush re-seeds a mid-stream entry whose TCP
+# state reads ESTABLISHED despite never seeing a reply. D4's flush put one
+# of those ghosts in this reader's window. The real flow always has replies.
 session_mark() {
     local rows n
-    rows=$(conntrack -L -p tcp --dport "$SVC" --state ESTABLISHED 2>/dev/null) || rows=""
+    rows=$(conntrack -L -p tcp --dport "$SVC" --state ESTABLISHED 2>/dev/null | grep -v UNREPLIED) || rows=""
     n=$(printf '%s' "$rows" | grep -c 'mark=') || n=0
     if [[ "$n" -ne 1 ]]; then echo "AMBIGUOUS:$n"; return 0; fi
     printf '0x%08x' "$(printf '%s' "$rows" | grep -oP 'mark=\K[0-9]+' | head -1)"
@@ -792,7 +834,10 @@ trace_case() { # <slug> <label> <src> <port>
     printf "\n    ${YELLOW}%s${RESET}\n" "$label"
     # First packet of the flow only: the SYN decides admission, and the
     # retransmits that follow a drop are the same story repeated.
-    grep -E 'rule|verdict|policy' "$out" | head -8 | sed 's/^/      /'
+    # trace_hook's own "meta nftrace set 1" lines are plumbing, not story,
+    # and they ate the 8-line budget: the archived foreign-chain trace lost
+    # its verdict line to them.
+    grep -E 'rule|verdict|policy' "$out" | grep -v trace_hook | head -8 | sed 's/^/      /'
     [[ -n "$TRACE_DIR" ]] && cp "$out" "$TRACE_DIR/$slug.txt"
     rm -f "$out"
     nft delete chain inet authnft trace_hook 2>/dev/null
@@ -822,7 +867,7 @@ done
 # A section that dies quietly, or an arm that is edited out, shows up here
 # as a short matrix rather than as a clean pass. This is the D3 class the
 # codex bot found: the run reported success for cases it never executed.
-EXPECTED_CASES=37
+EXPECTED_CASES=38
 if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
     printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
         "${#ROWS[@]}" "$EXPECTED_CASES"
