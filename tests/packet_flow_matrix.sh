@@ -38,11 +38,11 @@ SCOPE_B=authnft-flow-bob
 # ---------------------------------------------------------------- outer
 if [[ "${1:-}" != "--inner" ]]; then
     [[ $EUID -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
-    # conntrack(8) is required, not optional: D3 is the only case that
-    # shows the flush revoking an established flow, and ASSURANCE_CASE
-    # C3 and CONCEPTS both cite D1 to D3 as the pin for the revocation
-    # bound. Skipping it while still reporting success would leave two
-    # shipped docs citing an arm that never ran.
+    # conntrack(8) is required, not optional: D4 is the only case where a
+    # conntrack flush is the sole revoker (the documented fallback for a
+    # session that never got an id), and ASSURANCE_CASE and CONCEPTS cite
+    # the D arms as the revocation pin. Skipping it while still reporting
+    # success would leave shipped docs citing an arm that never ran.
     for t in ip nft socat ss systemd-run systemctl conntrack; do
         command -v "$t" >/dev/null 2>&1 || { echo "missing required tool: $t" >&2; exit 1; }
     done
@@ -239,6 +239,7 @@ jump_rule_after_ct() { # <session-tag>
     local h
     h=$(nft -a list chain inet authnft filter | awk '/ct-live/{print $NF}')
     [[ -n "$h" ]] || die "no ct rule to position after (session $1)"
+    [[ $(wc -w <<<"$h") -eq 1 ]] || die "ct-live matched more than one rule; refusing to guess a handle"
     nft add rule inet authnft filter position "$h" jump "session_$1" \
         || die "positioned jump for $1"
 }
@@ -255,6 +256,7 @@ module_down() { # <session-tag>
     local tag="$1" h
     h=$(nft -a list chain inet authnft filter | awk "/jump session_$tag/{print \$NF}")
     [[ -n "$h" ]] || die "module_down $tag: no jump rule to delete (session was never up?)"
+    [[ $(wc -w <<<"$h") -eq 1 ]] || die "module_down $tag: more than one jump rule matched; refusing to guess"
     nft -f - <<RULES || die "module_down $tag: teardown transaction failed"
 delete rule inet authnft filter handle $h
 flush chain inet authnft session_$tag
@@ -296,7 +298,9 @@ counter_static() { # <case-id> <rule-comment> <what it proves>
 }
 admitted_by() { counter_moved "$1" "$2" "$3" "admitted by the intended rule, not by accident"; }
 
-cnt() { nft list table inet authnft 2>/dev/null | grep "$1" | grep -oP 'packets \K[0-9]+' | head -1; }
+# Anchored on the full comment: a bare substring match let cnt sess-a also
+# hit the sess-a-deny line, with listing order deciding which one it read.
+cnt() { nft list table inet authnft 2>/dev/null | grep -F "comment \"$1\"" | grep -oP 'packets \K[0-9]+' | head -1; }
 
 # Discard anything already queued on the socket before probing it. Without
 # this a reply that was in flight when the rules changed is read by the NEXT
@@ -437,9 +441,10 @@ if read -t 3 -r _ <&4; then D1=PASS; else D1=BLOCK; fi
 check D1 BLOCK "$D1" "flow admitted during the session, revoked at close_session"
 check D2 BLOCK "$(verdict $OK_SRC $SVC)" "new flow after close_session"
 
-# D3 predates the gate: a conntrack flush by source address revokes the
-# flow too, which is what authpf does. Kept because it is still true and
-# still the fallback when no id was ever allocated.
+# D3 predates the gate and is now overdetermined: by the time the flush
+# runs, the gate has already revoked this flow, so this BLOCK cannot be
+# credited to conntrack -D. Kept as belt-and-braces (flush after close
+# leaves the flow just as dead); D4 is where the flush earns its keep.
 conntrack -D -s "$OK_SRC" >/dev/null 2>&1
 drain 4; printf 'three\n' >&4
 if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
@@ -641,31 +646,28 @@ counter_moved G5 frag-shared-deny "$G5_BEFORE" "the leftover fragment rule did t
 exec 6<&-
 
 # ======================================================================
-note "I. Conntrack revocation: the ct mark gate proposed for #103"
+note "I. Conntrack revocation: the ct mark gate shipped for #103"
 # ======================================================================
-# D1 is the gap: a flow admitted during a session keeps passing after close,
-# because the shared established-accept fires before any session jump and
-# conntrack never hears about the teardown.
-#
-# The proposed shape. Each session tags new connections with an id in the low
-# 24 bits of ct mark. The shared established-accept is split in two: untagged
-# flows (the SSH connection, everything the module does not govern) accept
-# unconditionally; tagged flows accept only while their id is in a live
-# sessions set. Close deletes the element, so the next packet of a revoked
-# flow falls through to the site deny.
-#
-# None of this is in the module. These arms decide whether it is worth
-# building, against the real chain layout rather than a synthetic one, and
-# with a real pre-session flow standing in for the SSH connection, because
-# breaking that locks everyone out of the host.
+# The ct mark gate, isolated. The module ships this since 9c224ad (#103):
+# each session tags its new connections with an id in the low 24 bits of
+# ct mark, the shared established-accept is split into an unsessioned arm
+# and a live-id arm, and close deletes the id so a revoked flow's next
+# packet falls through to the site deny. Section D proves the module-shaped
+# build revokes; these arms pin the gate's own semantics: which flows the
+# close kills (I2), which it must never touch (I3), and why ids must not
+# repeat (I4, I5), with a real pre-session flow standing in for the SSH
+# connection because breaking that locks everyone out of the host.
 SESS_MASK=0x00ffffff     # the slice a session id lives in
 ADMIN_MASK=0xff000000    # bits the admin keeps
 ADMIN_BITS=0xab000000    # what an admin rule puts there first
 CTM_A=0x000001
 CTM_B=0x000002
 
-# The shared chain, with the established-accept split. Order matches the
-# module: jumps are inserted at the head, everything else appended.
+# Builds the gate plus one tagged session. The jump is head-inserted, which
+# is the module's no-gate fallback path (nft_handler.c positions it after
+# the est-live rule when it can); every verdict below is placement-
+# independent, and the module's real placement is what sections D and E
+# exercise.
 ctmark_up() { # <session-tag> <cgroup> <src> <session-id>
     local tag="$1" cg="$2" src="$3" sid="$4"
     nft -f - <<RULES || die "ct mark gate setup for $tag"
@@ -722,6 +724,8 @@ site_deny "$SVC"; site_deny "$ALT"
 
 hold_open 8 "$SVC" || die "I: session flow would not open"
 printf 'one\n' >&8; read -t 3 -r _ <&8 || die "I: session flow never worked"
+# The observation is the hold_open and exchange above: both die on failure,
+# so reaching this line IS the pass. Recorded so the matrix counts it.
 check I1 PASS "PASS" "session flow admitted while the session is live (control)"
 # Earlier sections leave a dozen conntrack entries on this port in TIME_WAIT
 # and SYN_SENT. Filtering to the single ESTABLISHED one is what makes this
@@ -801,7 +805,10 @@ trace_case() { # <slug> <label> <src> <port>
     printf "\n    ${YELLOW}%s${RESET}\n" "$label"
     # First packet of the flow only: the SYN decides admission, and the
     # retransmits that follow a drop are the same story repeated.
-    grep -E 'rule|verdict|policy' "$out" | head -8 | sed 's/^/      /'
+    # trace_hook's own "meta nftrace set 1" lines are plumbing, not story,
+    # and they ate the 8-line budget: the archived foreign-chain trace lost
+    # its verdict line to them.
+    grep -E 'rule|verdict|policy' "$out" | grep -v trace_hook | head -8 | sed 's/^/      /'
     [[ -n "$TRACE_DIR" ]] && cp "$out" "$TRACE_DIR/$slug.txt"
     rm -f "$out"
     nft delete chain inet authnft trace_hook 2>/dev/null
