@@ -27,9 +27,11 @@ On a supported kernel, configured as documented, pam_authnft upholds:
   an id in the conntrack mark; the shared chain accepts established
   traffic only while that id is live. Flows the module never admitted,
   including the SSH connection the login arrived on, are untagged and
-  unaffected. Pinned by cases D1 to D3 and I1 to I6 of
+  unaffected. Pinned by cases D1 to D4 and I1 to I6 of
   `make test-packet-flow`, and by integration case 10.27 which exercises
-  the id lifecycle through the module itself. D1 expected the opposite
+  the id lifecycle through the module itself. D4 isolates the
+  conntrack-flush fallback for sessions that never received an id; in
+  D1 to D3 the gate revokes first. D1 expected the opposite
   before the gate landed, and that expectation was the bug (issue #103).
   See [research/packet-flow-audit.md](../research/packet-flow-audit.md).
 - **C4. Fail closed on open.** Malformed, missing or hostile input at

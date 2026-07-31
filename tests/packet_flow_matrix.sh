@@ -451,6 +451,30 @@ if read -t 3 -r _ <&4; then D3=PASS; else D3=BLOCK; fi
 check D3 BLOCK "$D3" "same flow after a conntrack flush by source address"
 exec 4<&-
 
+# D4: the fallback on its own. A session that never got an id leaves an
+# untagged flow the gate's unsessioned arm carries forever; the documented
+# remedy is a conntrack flush by source address (what authpf does). D1-D3
+# can no longer show that: the gate revokes first. Here nothing but the
+# flush ever revokes: no session, no tag, gate present before the flow
+# opens (C3's precondition), deny added after it establishes.
+table_down
+nft -f - <<RULES || die "D4 setup"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+RULES
+ct_rule
+exec 4<>/dev/tcp/127.0.0.1/$ALT || die "D4: untagged flow would not open"
+printf 'one\n' >&4; read -t 3 -r _ <&4 || die "D4: untagged flow never worked"
+site_deny "$ALT"
+drain 4; printf 'two\n' >&4
+read -t 3 -r _ <&4 || die "D4: untagged flow did not survive the deny; the gate is broken in an arrangement C1 does not cover"
+conntrack -D -s "$OK_SRC" >/dev/null 2>&1
+drain 4; printf 'three\n' >&4
+if read -t 3 -r _ <&4; then D4=PASS; else D4=BLOCK; fi
+check D4 BLOCK "$D4" "untagged flow revoked by a conntrack flush alone (the no-id fallback)"
+counter_moved D4 "deny-$ALT" 0 "the post-flush packets arrived and were dropped"
+exec 4<&-
+
 # ======================================================================
 note "E. Enforcement placement: where the site deny has to go (#105)"
 # ======================================================================
@@ -730,9 +754,14 @@ check I1 PASS "PASS" "session flow admitted while the session is live (control)"
 # Earlier sections leave a dozen conntrack entries on this port in TIME_WAIT
 # and SYN_SENT. Filtering to the single ESTABLISHED one is what makes this
 # reproducible; head -1 over all of them returned a different mark per run.
+# UNREPLIED is filtered too: a socket closed while a deny held its port is
+# orphaned with unacked data and retransmits for minutes, and each
+# retransmit after a conntrack flush re-seeds a mid-stream entry whose TCP
+# state reads ESTABLISHED despite never seeing a reply. D4's flush put one
+# of those ghosts in this reader's window. The real flow always has replies.
 session_mark() {
     local rows n
-    rows=$(conntrack -L -p tcp --dport "$SVC" --state ESTABLISHED 2>/dev/null) || rows=""
+    rows=$(conntrack -L -p tcp --dport "$SVC" --state ESTABLISHED 2>/dev/null | grep -v UNREPLIED) || rows=""
     n=$(printf '%s' "$rows" | grep -c 'mark=') || n=0
     if [[ "$n" -ne 1 ]]; then echo "AMBIGUOUS:$n"; return 0; fi
     printf '0x%08x' "$(printf '%s' "$rows" | grep -oP 'mark=\K[0-9]+' | head -1)"
@@ -838,7 +867,7 @@ done
 # A section that dies quietly, or an arm that is edited out, shows up here
 # as a short matrix rather than as a clean pass. This is the D3 class the
 # codex bot found: the run reported success for cases it never executed.
-EXPECTED_CASES=37
+EXPECTED_CASES=38
 if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
     printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
         "${#ROWS[@]}" "$EXPECTED_CASES"
