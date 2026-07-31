@@ -1222,4 +1222,166 @@ fi
 pass "10.27: id $TAG_1027 tagged and live during the session; the second session's id was added and revoked at close (mask $MASK_1027 preserves admin bits)"
 nft delete table inet authnft 2>/dev/null || true
 
+# 10.28: every legacy established-accept is swept, not just the first (#113
+# follow-up). The pre-gate module added its unconditional established-accept
+# with probe-then-add, which races concurrent opens, so an upgraded host can
+# hold several. One survivor nullifies the gate: the gate's arms decline a
+# revoked flow and evaluation continues into the survivor's accept;
+# the sweep has to take them all in one open.
+printf "${YELLOW}10.28: an upgraded host's duplicate established-accepts are all swept${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+# The chain as the pre-gate module left it after a concurrent-open race:
+# the shared skeleton plus TWO unconditional established-accepts.
+nft -f - <<'NFT' || fail "10.28: could not seed the upgraded-host chain"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add rule inet authnft filter ct state established,related accept
+add rule inet authnft filter ct state established,related accept
+NFT
+
+# Falsifier first: both legacy rules really are in the chain, so "zero left
+# after the open" cannot be true vacuously.
+legacy_1028() { # grep -c exits 1 at zero matches; 0 is an expected count here
+    nft list chain inet authnft filter 2>/dev/null \
+        | { grep 'ct state established,related' || true; } \
+        | { grep -vc 'ct mark' || true; }
+}
+L_BEFORE=$(legacy_1028)
+[[ "$L_BEFORE" -eq 2 ]] || fail "10.28: seeded $L_BEFORE legacy rules, expected 2"
+
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.28: session did not open on the upgraded-host chain"
+fi
+
+L_AFTER=$(legacy_1028)
+if [[ "$L_AFTER" -ne 0 ]]; then
+    nft list chain inet authnft filter >&2
+    fail "10.28: $L_AFTER unconditional established-accept(s) survived the open — the gate is defeated on upgraded hosts"
+fi
+
+# And the gate itself must be standing where the legacies were: both arms,
+# ahead of the session jump.
+G_1028=$(nft list chain inet authnft filter 2>/dev/null | grep -c 'authnft-est-' || true)
+[[ "$G_1028" -eq 2 ]] || { nft list chain inet authnft filter >&2; \
+    fail "10.28: expected both gate arms after the sweep, found $G_1028"; }
+
+pass "10.28: both duplicate established-accepts swept in one open, gate installed ($L_BEFORE -> $L_AFTER)"
+nft delete table inet authnft 2>/dev/null || true
+
+# 10.29: the boot-restored deny does not shadow the first session. The
+# ADMIN_GUIDE reboot recipe creates the table, the chain, and the site
+# deny before any session opens, so the deny predates the gate itself.
+# An appended gate lands behind that deny and the jump positioned after
+# the gate lands behind it too, shadowing every session on the host. The
+# module inserts instead; this pins the order it must produce.
+printf "${YELLOW}10.29: gate and jump insert above a deny that predates them${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+# The chain as the ADMIN_GUIDE recipe leaves it after a reboot.
+nft -f - <<'NFT' || fail "10.29: could not seed the boot-restored chain"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add rule inet authnft filter tcp dport 19397 counter drop comment "site-deny-1029"
+NFT
+
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.29: session did not open on the boot-restored chain"
+fi
+
+CHAIN_1029=$(nft list chain inet authnft filter 2>/dev/null)
+GATE_1029=$(echo "$CHAIN_1029" | grep -n 'authnft-est-unsessioned' | cut -d: -f1 || true)
+JUMP_1029=$(echo "$CHAIN_1029" | grep -n 'jump session_' | cut -d: -f1 || true)
+DENY_1029=$(echo "$CHAIN_1029" | grep -n 'site-deny-1029' | cut -d: -f1 || true)
+[[ -n "$GATE_1029" && -n "$JUMP_1029" && -n "$DENY_1029" ]] \
+    || { echo "$CHAIN_1029" >&2; fail "10.29: could not locate gate, jump, or deny"; }
+if [[ "$GATE_1029" -gt "$DENY_1029" || "$JUMP_1029" -gt "$DENY_1029" ]]; then
+    echo "$CHAIN_1029" >&2
+    fail "10.29: gate (line $GATE_1029) or jump (line $JUMP_1029) landed behind the pre-existing deny (line $DENY_1029) — shadowed"
+fi
+
+pass "10.29: gate at $GATE_1029 and jump at $JUMP_1029, both above the boot-restored deny at $DENY_1029"
+nft delete table inet authnft 2>/dev/null || true
+
+# 10.30: the documented sandbox bypass still opens a session. The mark is
+# normally allocated in the sandboxed child before the seccomp filter goes
+# on; the AUTHNFT_NO_SANDBOX branch skipped that step, so setup saw mark 0
+# and denied every managed login under the bypass. The valgrind arm of the
+# audit tier runs this exact combination but judges only leaks, which is
+# how the denial hid inside a passing audit.
+printf "${YELLOW}10.30: AUTHNFT_NO_SANDBOX bypass allocates a session mark${RESET}\n"
+nft delete table inet authnft 2>/dev/null || true
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+if ! env AUTHNFT_NO_SANDBOX=1 pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" \
+        open_session >/dev/null 2>&1; then
+    fail "10.30: session did not open under AUTHNFT_NO_SANDBOX=1"
+fi
+LIVE_1030=$(nft list set inet authnft live_sessions 2>/dev/null \
+    | grep -oP 'elements = \{ \K[^}]*' | tr -d ' ' || true)
+[[ -n "$LIVE_1030" ]] || { nft list table inet authnft >&2; \
+    fail "10.30: live_sessions is empty — the bypass path allocated no mark"; }
+
+pass "10.30: bypass session opened with id $LIVE_1030 live"
+nft delete table inet authnft 2>/dev/null || true
+
+# 10.31: the ADMIN_GUIDE reboot recipe, run literally, in both orders. The
+# recipe is extracted from the doc rather than restated here, so a doc edit
+# that breaks its syntax (the '"..."' shell idiom pasted into the nft -f
+# heredoc did exactly that once) or drifts its chain declaration away from
+# the module's fails this case instead of failing silently at some site's
+# boot. The doc claims the recipe is safe whether the loader runs before
+# or after the first session; both halves are executed here.
+printf "${YELLOW}10.31: the documented reboot recipe works, in both orders${RESET}\n"
+RECIPE_1031=$(awk '/^nft -f - <<.EOF.$/{f=1;next} f&&/^EOF$/{exit} f' \
+    "$TESTS_DIR/../docs/ADMIN_GUIDE.md")
+[[ -n "$RECIPE_1031" ]] || fail "10.31: could not extract the recipe block from ADMIN_GUIDE.md"
+cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+
+# Order one, loader first: the recipe builds the table, then the first
+# session must slot its gate and jump above the recipe's deny.
+nft delete table inet authnft 2>/dev/null || true
+echo "$RECIPE_1031" | nft -f - || fail "10.31: the documented recipe does not run on an empty ruleset"
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.31: session did not open after the recipe ran (loader-first)"
+fi
+C_1031=$(nft list chain inet authnft filter 2>/dev/null)
+G_A=$(echo "$C_1031" | grep -n 'authnft-est-unsessioned' | cut -d: -f1 || true)
+J_A=$(echo "$C_1031" | grep -n 'jump session_' | cut -d: -f1 || true)
+D_A=$(echo "$C_1031" | grep -n 'site-default-deny' | cut -d: -f1 || true)
+[[ -n "$G_A" && -n "$J_A" && -n "$D_A" && "$G_A" -lt "$D_A" && "$J_A" -lt "$D_A" ]] \
+    || { echo "$C_1031" >&2; fail "10.31: loader-first order wrong (gate $G_A, jump $J_A, deny $D_A)"; }
+
+# Order two, session first: the recipe's add table/add chain must re-add
+# cleanly against the chain the module already built (same declaration),
+# and its deny must land after the existing jump.
+nft delete table inet authnft 2>/dev/null || true
+if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+    fail "10.31: session did not open on an empty ruleset (session-first)"
+fi
+echo "$RECIPE_1031" | nft -f - \
+    || fail "10.31: the documented recipe fails against a module-built table — its chain declaration has drifted from the module's"
+C_1031=$(nft list chain inet authnft filter 2>/dev/null)
+J_B=$(echo "$C_1031" | grep -n 'jump session_' | cut -d: -f1 || true)
+D_B=$(echo "$C_1031" | grep -n 'site-default-deny' | cut -d: -f1 || true)
+[[ -n "$J_B" && -n "$D_B" && "$J_B" -lt "$D_B" ]] \
+    || { echo "$C_1031" >&2; fail "10.31: session-first order wrong (jump $J_B, deny $D_B)"; }
+
+pass "10.31: recipe verbatim from the doc: loader-first gate=$G_A jump=$J_A deny=$D_A; session-first jump=$J_B deny=$D_B"
+nft delete table inet authnft 2>/dev/null || true
+
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

@@ -116,6 +116,16 @@ static int run_sandboxed_nft_setup(pam_handle_t *pamh, const char *user,
         pam_syslog(pamh, LOG_DEBUG, "authnft: seccomp bypassed");
         if (!nft_user_in_authnft_group(pamh, user))
             return PAM_SUCCESS;
+        /* The sandboxed path allocates the mark in the child, before the
+         * filter goes on. There is no child and no filter here, but setup
+         * still requires the mark and still must not admit a session that
+         * cannot be revoked, so the same allocate-or-deny applies. */
+        if ((sd->session_mark = session_mark_alloc(pamh)) == 0) {
+            pam_syslog(pamh, LOG_ERR,
+                       "authnft: no session mark for %s; denying rather than "
+                       "admitting a session that cannot be revoked", user);
+            return PAM_SESSION_ERR;
+        }
         authnft_reject_reason reason = AUTHNFT_REJECT_NONE;
         int rc = nft_handler_setup(pamh, user, session_pid, sd, &reason);
         emit_reject_message(pamh, user, reason);

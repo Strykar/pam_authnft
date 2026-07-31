@@ -154,6 +154,27 @@ int main(int argc, char **argv)
         }
         if (rc == PAM_SUCCESS)
             nft_handler_cleanup(pamh, user, &sd);
+    } else if (strcmp(scen, "legacyrace") == 0) {
+        /* The legacy sweep loses its race: another open deleted the same
+         * handles between this open's probe and its delete. Staged by the
+         * interposer (AUTHNFT_NFT_RACE_LEGACY), which runs the delete for
+         * real and then reports failure; run-audit.sh seeds the two legacy
+         * rules. The sweep must re-probe, see its postcondition already
+         * holds, and proceed — a SUCCESS here is also the module's own
+         * proof that no legacy accept survived, since the sweep fails
+         * closed when the re-probe finds one. Negative control: make the
+         * sweep treat any delete error as fatal (drop the re-probe) and
+         * this cell fails, a denied login. */
+        rc = nft_handler_setup(pamh, user, getpid(), &sd, NULL);
+        printf("[legacyrace] setup rc=%d (PAM_SUCCESS=%d)\n",
+               rc, PAM_SUCCESS);
+        if (rc != PAM_SUCCESS) {
+            fprintf(stderr, "[legacyrace] FAIL: the sweep treated a raced "
+                    "delete as fatal; a legitimate login was denied\n");
+            verdict = 1;
+        }
+        if (rc == PAM_SUCCESS)
+            nft_handler_cleanup(pamh, user, &sd);
     } else if (strcmp(scen, "selfheal") == 0) {
         /* PID recycle onto a leaked session's names: a previous session for
          * this (user, pid) died without close_session, so its per-session

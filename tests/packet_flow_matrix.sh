@@ -205,10 +205,14 @@ session_built() { # <session-tag>
 # change from this: their flows carry mark 0 and the unsessioned arm takes
 # them, exactly as the old rule did.
 ct_rule() {
+    # Inserted, not added, as the module does it: the chain can already
+    # hold a boot-restored site deny, and an appended gate lands behind
+    # it (E10). The live arm goes first in the buffer because sequential
+    # inserts stack at the head in reverse.
     nft -f - <<'RULES' || die "ct gate"
 add set inet authnft live_sessions { type mark; }
-add rule inet authnft filter ct state established,related ct mark and 0x00ffffff 0x0 counter accept comment "ct-accept"
-add rule inet authnft filter ct state established,related ct mark and 0x00ffffff @live_sessions counter accept comment "ct-live"
+insert rule inet authnft filter ct state established,related ct mark and 0x00ffffff @live_sessions counter accept comment "ct-live"
+insert rule inet authnft filter ct state established,related ct mark and 0x00ffffff 0x0 counter accept comment "ct-accept"
 RULES
 }
 
@@ -494,12 +498,12 @@ printf "       sess-b=%s (>0 proves bob's jump was reached this time)\n" "$(cnt 
 # the reordering. Without this E6 could pass by breaking enforcement.
 check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with the jump positioned (E6 control)"
 
-# E2 with the jump inserted. E2 is the admin who puts the deny in the shared
-# chain before any session has ever opened, which is the normal case after a
-# reboot: the deny is restored from the site ruleset, then people log in.
-# Appending shadowed every one of them. Positioning after the ct rule means
-# where the admin puts the deny stops mattering, which is what the
-# deployment contract in ADMIN_GUIDE is allowed to claim.
+# E2 with the jump inserted: the deny goes into a live table after the
+# gate exists but before this session's jump does, and positioning still
+# puts the jump ahead of it. Appending shadowed every later session. This
+# is NOT the reboot case: a boot loader restores the deny before the gate
+# exists at all, and this arm's gate-then-deny order cannot catch a gate
+# that appends behind the deny. E10 pins that order.
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule_after_ct a
 check E8 PASS "$(verdict $OK_SRC $SVC)" "deny placed BEFORE any session, jump positioned after the ct rule"
 printf "       sess-a=%s (>0 proves the jump ran ahead of a deny that predates it)\n" "$(cnt sess-a)"
@@ -524,6 +528,37 @@ check E9 PASS "$([[ "$E9_ENTERED2" -eq "$E9_ENTERED" && "$E9_CT2" -gt "$E9_CT" ]
 printf "       session-chain entries %s -> %s (must not move), ct-accept %s -> %s (must move)\n" \
     "$E9_ENTERED" "$E9_ENTERED2" "$E9_CT" "$E9_CT2"
 exec 9<&-
+
+# The ADMIN_GUIDE reboot case: the loader restores the site deny into the
+# module's chain before any session has opened, so the deny predates the
+# gate itself, not just the jump (that was E8). An appended gate lands
+# behind the deny, and the jump positioned after the gate lands behind it
+# too, shadowing every session on the host. Insert puts both above it.
+table_down
+nft -f - <<RULES || die "boot-restored deny for E10"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add rule inet authnft filter tcp dport $SVC counter drop comment "deny-$SVC"
+RULES
+module_up a "$CG_A" "$OK_SRC"
+ct_rule; jump_rule_after_ct a
+# Structural falsifier: the gate really sits above the deny. Without this
+# E10 could pass on a deny that never matched anything.
+E10_GATE=$(nft list chain inet authnft filter | grep -n 'ct-accept' | cut -d: -f1)
+E10_DENY=$(nft list chain inet authnft filter | grep -n "deny-$SVC" | cut -d: -f1)
+[[ -n "$E10_GATE" && -n "$E10_DENY" && "$E10_GATE" -lt "$E10_DENY" ]] \
+    || die "E10: gate (line ${E10_GATE:-absent}) not above the boot-restored deny (line ${E10_DENY:-absent})"
+E10_BEFORE=$(cnt sess-a); E10_BEFORE=${E10_BEFORE:-0}
+check E10 PASS "$(verdict $OK_SRC $SVC)" "deny restored at boot, before the gate existed; gate and jump inserted above it"
+admitted_by E10 sess-a "$E10_BEFORE"
+check E11 BLOCK "$(verdict $BAD_SRC $SVC)" "the boot-restored deny still denies (E10 control)"
+# Arrival control, same contract as A2/A3: a BLOCK is only evidence if the
+# packet reached the deny. A connect that never sent a SYN reports BLOCK too.
+E11_DENY=$(cnt "deny-$SVC")
+if [[ -z "$E11_DENY" || "$E11_DENY" -eq 0 ]]; then
+    printf "${RED}[FAIL]${RESET} E11 arrival control: deny counter for %s never moved\n" "$SVC"; RC=1
+fi
+printf "       arrival control: deny-%s=%s (the deny is live, not bypassed)\n" "$SVC" "${E11_DENY:-0}"
 
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
@@ -787,7 +822,7 @@ done
 # A section that dies quietly, or an arm that is edited out, shows up here
 # as a short matrix rather than as a clean pass. This is the D3 class the
 # codex bot found: the run reported success for cases it never executed.
-EXPECTED_CASES=35
+EXPECTED_CASES=37
 if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
     printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
         "${#ROWS[@]}" "$EXPECTED_CASES"
