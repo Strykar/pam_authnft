@@ -268,21 +268,33 @@ RULES
     return 0
 }
 
-# A PASS says a payload round-tripped. It does not say which rule let it
-# through, and on a policy-accept chain "nothing was enforcing" produces the
-# same PASS as "the intended rule fired". admitted_by asserts the counter on
-# the rule that was supposed to admit it actually moved.
-admitted_by() { # <case-id> <rule-comment> <count before>
-    local id="$1" comment="$2" before="$3" after
+# A PASS says a payload round-tripped; a BLOCK says it did not. Neither says
+# which rule did it. These two tie the verdict to the counter on the rule the
+# case is about, and fail the run when the number disagrees with the story.
+# A printed control nobody checks is decoration.
+counter_moved() { # <case-id> <rule-comment> <count-before> <what it proves>
+    local id="$1" comment="$2" before="${3:-0}" why="$4" after
     after=$(cnt "$comment"); after=${after:-0}; before=${before:-0}
     if [[ "$after" -gt "$before" ]]; then
-        printf "       %s admitted by '%s' (%s -> %s)\n" "$id" "$comment" "$before" "$after"
+        printf "       %s control: '%s' %s -> %s (%s)\n" "$id" "$comment" "$before" "$after" "$why"
     else
-        printf "${RED}[FAIL]${RESET} %s: traffic passed but '%s' never counted (%s -> %s) — nothing was enforcing\n" \
-            "$id" "$comment" "$before" "$after" >&2
+        printf "${RED}[FAIL]${RESET} %s control: '%s' never moved (%s -> %s): %s\n" \
+            "$id" "$comment" "$before" "$after" "$why" >&2
         RC=1
     fi
 }
+counter_static() { # <case-id> <rule-comment> <what it proves>
+    local id="$1" comment="$2" why="$3" val
+    val=$(cnt "$comment"); val=${val:-0}
+    if [[ "$val" -eq 0 ]]; then
+        printf "       %s control: '%s' stayed 0 (%s)\n" "$id" "$comment" "$why"
+    else
+        printf "${RED}[FAIL]${RESET} %s control: '%s' counted %s: %s\n" \
+            "$id" "$comment" "$val" "$why" >&2
+        RC=1
+    fi
+}
+admitted_by() { counter_moved "$1" "$2" "$3" "admitted by the intended rule, not by accident"; }
 
 cnt() { nft list table inet authnft 2>/dev/null | grep "$1" | grep -oP 'packets \K[0-9]+' | head -1; }
 
@@ -311,15 +323,9 @@ check A3 BLOCK "$(verdict $BAD_SRC $SVC)" "allowed port, source not in the sessi
 
 # The negative cases above must not pass vacuously: the deny counters prove
 # the packets arrived and were dropped rather than never being sent.
-D_ALT=$(cnt "deny-$ALT"); D_SVC=$(cnt "deny-$SVC")
-if [[ -z "$D_ALT" || "$D_ALT" -eq 0 ]]; then
-    printf "${RED}[FAIL]${RESET} A2 arrival control: deny counter for %s never moved\n" "$ALT"; RC=1
-fi
-if [[ -z "$D_SVC" || "$D_SVC" -eq 0 ]]; then
-    printf "${RED}[FAIL]${RESET} A3 arrival control: deny counter for %s never moved\n" "$SVC"; RC=1
-fi
-printf "       arrival controls: deny-%s=%s deny-%s=%s sess-a=%s\n" \
-    "$ALT" "${D_ALT:-0}" "$SVC" "${D_SVC:-0}" "$(cnt sess-a)"
+counter_moved A2 "deny-$ALT" 0 "the A2 packets arrived and were dropped, not never sent"
+counter_moved A3 "deny-$SVC" 0 "the A3 packets arrived and were dropped, not never sent"
+printf "       sess-a=%s\n" "$(cnt sess-a)"
 
 # ======================================================================
 note "B. Isolation: one session's rules must not admit another's traffic"
@@ -403,9 +409,9 @@ if read -t 3 -r _ <&5; then C3=PASS; fi
 check C3 BLOCK "$C3" "flow that predates conntrack tracking, ct rule added after"
 # The ct counter is not zero here: conntrack picks the flow up mid-stream and
 # the reply direction matches established. The client-to-server data packets
-# still land in the deny. Report both numbers rather than a story about why.
-printf "       ct-accept=%s deny-%s=%s (rule present, data packets still dropped)\n" \
-    "$(cnt ct-accept)" "$ALT" "$(cnt "deny-$ALT")"
+# still land in the deny.
+counter_moved C3 "deny-$ALT" 0 "the data packets landed in the deny despite the ct rule"
+printf "       ct-accept=%s (nonzero: conntrack picks the flow up mid-stream in the reply direction)\n" "$(cnt ct-accept)"
 exec 5<&-
 
 # ======================================================================
@@ -448,13 +454,13 @@ check E1 PASS  "$(verdict $OK_SRC $SVC)" "deny appended to the shared chain AFTE
 
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule a
 check E2 BLOCK "$(verdict $OK_SRC $SVC)" "deny added BEFORE the jump: session chain shadowed"
-printf "       shadow control: sess-a=%s (0 proves the jump was never reached)\n" "$(cnt sess-a)"
+counter_static E2 sess-a "the jump was never reached"
 
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; jump_rule a
 nft add chain inet authnft sitedeny '{ type filter hook input priority filter; policy drop; }'
 nft add rule inet authnft sitedeny ct state established,related counter accept
 check E3 BLOCK "$(verdict $OK_SRC $SVC)" "site deny as a separate base chain at priority filter"
-printf "       shadow control: sess-a=%s (>0 proves the module accepted and was overruled)\n" "$(cnt sess-a)"
+counter_moved E3 sess-a 0 "the module accepted and was overruled afterwards"
 
 # E1 is only true until the next login. The module APPENDS its jump rule, so
 # a session opened after the site deny lands behind it and is never reached.
@@ -475,7 +481,7 @@ add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4
 RULES
 jump_rule b     # appended, so it lands AFTER the deny
 check E4 BLOCK "$(verdict $OK_SRC 19102)" "session opened after the site deny: its jump is shadowed"
-printf "       shadow control: sess-b=%s (0 proves bob's jump was never reached)\n" "$(cnt sess-b)"
+counter_static E4 sess-b "bob's jump was never reached"
 # The control that makes E4 mean something: alice, whose jump predates the
 # deny, is unaffected. Without this the run cannot tell "bob is shadowed"
 # from "the whole table is broken".
@@ -493,7 +499,7 @@ add rule inet authnft session_b socket cgroupv2 level 2 . ip saddr @session_b_v4
 RULES
 jump_rule_after_ct b
 check E6 PASS "$(verdict $OK_SRC 19102)" "same session, jump positioned after the ct rule (#105 fix)"
-printf "       sess-b=%s (>0 proves bob's jump was reached this time)\n" "$(cnt sess-b)"
+counter_moved E6 sess-b 0 "bob's jump was reached this time"
 # And the deny still denies: a source in nobody's set must not ride in on
 # the reordering. Without this E6 could pass by breaking enforcement.
 check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with the jump positioned (E6 control)"
@@ -506,7 +512,7 @@ check E7 BLOCK "$(verdict $BAD_SRC 19102)" "deny still denies with the jump posi
 # that appends behind the deny. E10 pins that order.
 table_down; module_up a "$CG_A" "$OK_SRC"; ct_rule; site_deny "$SVC"; jump_rule_after_ct a
 check E8 PASS "$(verdict $OK_SRC $SVC)" "deny placed BEFORE any session, jump positioned after the ct rule"
-printf "       sess-a=%s (>0 proves the jump ran ahead of a deny that predates it)\n" "$(cnt sess-a)"
+counter_moved E8 sess-a 0 "the jump ran ahead of a deny that predates it"
 
 # Why the jump goes after the ct rule and not at the head of the chain.
 # With jumps first, every packet of every established flow walks every live
@@ -554,11 +560,7 @@ admitted_by E10 sess-a "$E10_BEFORE"
 check E11 BLOCK "$(verdict $BAD_SRC $SVC)" "the boot-restored deny still denies (E10 control)"
 # Arrival control, same contract as A2/A3: a BLOCK is only evidence if the
 # packet reached the deny. A connect that never sent a SYN reports BLOCK too.
-E11_DENY=$(cnt "deny-$SVC")
-if [[ -z "$E11_DENY" || "$E11_DENY" -eq 0 ]]; then
-    printf "${RED}[FAIL]${RESET} E11 arrival control: deny counter for %s never moved\n" "$SVC"; RC=1
-fi
-printf "       arrival control: deny-%s=%s (the deny is live, not bypassed)\n" "$SVC" "${E11_DENY:-0}"
+counter_moved E11 "deny-$SVC" 0 "the boot-restored deny is live, not bypassed"
 
 # ======================================================================
 note "F. Complex fragments: a session chain that denies as well as allows"
@@ -573,20 +575,25 @@ F1_BEFORE=$(cnt sess-a); F1_BEFORE=${F1_BEFORE:-0}
 check F1 PASS  "$(verdict $OK_SRC $SVC)" "fragment allow rule, no site deny in play"
 admitted_by F1 sess-a "$F1_BEFORE"
 check F2 BLOCK "$(verdict $OK_SRC $ALT)" "fragment deny rule inside the session chain"
-printf "       fragment deny counter: %s\n" "$(cnt sess-a-deny)"
+counter_moved F2 sess-a-deny 0 "the fragment's own deny did the dropping"
 
 # And the same denied port once the session closes: the deny goes with it.
 module_down a
 # F3 passes because the deny went with the session, not because the traffic
-# was never sent or the table vanished. The rule's counter is unreachable
-# once its chain is gone, which is the proof; G2 separately pins that the
-# shared chain survived, so "everything vanished" cannot produce this pass.
+# was never sent or the table vanished. Two controls, both in THIS table
+# instance: the deny rule must be gone, and the shared chain must still be
+# standing. (An earlier draft pointed at G2 for the second half, but G2 runs
+# on a rebuilt table and cannot vouch for this one.)
 check F3 PASS "$(verdict $OK_SRC $ALT)" "fragment deny does not outlive the session"
 if [[ -n "$(cnt sess-a-deny)" ]]; then
     printf "${RED}[FAIL]${RESET} F3: the fragment deny rule is still present after close\n" >&2
     RC=1
 else
     printf "       F3 control: the fragment deny rule is gone, not merely unmatched\n"
+fi
+if [[ -z "$(cnt ct-accept)" ]]; then
+    printf "${RED}[FAIL]${RESET} F3 control: ct-accept is gone too; the whole table vanished with the session\n" >&2
+    RC=1
 fi
 
 # ======================================================================
@@ -628,7 +635,9 @@ check G3 PASS  "$([[ $G_FRAG -gt 0 ]] && echo PASS || echo BLOCK)" "chain a frag
 check G4 PASS  "$([[ $G_SHARED -gt 0 ]] && echo PASS || echo BLOCK)" "rule a fragment put in the shared chain survives close"
 # And the wire consequence of G4: that leftover rule still denies traffic
 # belonging to nobody's session, on a port the closed session never owned.
+G5_BEFORE=$(cnt frag-shared-deny); G5_BEFORE=${G5_BEFORE:-0}
 check G5 BLOCK "$(verdict $OK_SRC 19102)" "leftover shared-chain fragment rule still drops after close"
+counter_moved G5 frag-shared-deny "$G5_BEFORE" "the leftover fragment rule did the dropping"
 exec 6<&-
 
 # ======================================================================
