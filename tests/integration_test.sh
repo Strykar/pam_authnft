@@ -1199,7 +1199,7 @@ fi
 # The tag must leave the administrator's bits alone. A mask that clobbered
 # them would silently undo any ct-mark policy the site runs.
 MASK_1027=$(nft list table inet authnft 2>/dev/null \
-    | grep -oP 'ct mark set ct mark & \K0x[0-9a-f]+')
+    | grep -oP 'ct mark set ct mark & \K0x[0-9a-f]+(?= \|)')
 case "$MASK_1027" in
     0xff*) : ;;
     *) fail "10.27: tag mask $MASK_1027 does not preserve the admin bits" ;;
