@@ -1199,7 +1199,7 @@ fi
 # The tag must leave the administrator's bits alone. A mask that clobbered
 # them would silently undo any ct-mark policy the site runs.
 MASK_1027=$(nft list table inet authnft 2>/dev/null \
-    | grep -oP 'ct mark set ct mark & \K0x[0-9a-f]+')
+    | grep -oP 'ct mark set ct mark & \K0x[0-9a-f]+(?= \|)')
 case "$MASK_1027" in
     0xff*) : ;;
     *) fail "10.27: tag mask $MASK_1027 does not preserve the admin bits" ;;
@@ -1383,5 +1383,51 @@ D_B=$(echo "$C_1031" | grep -n 'site-default-deny' | cut -d: -f1 || true)
 
 pass "10.31: recipe verbatim from the doc: loader-first gate=$G_A jump=$J_A deny=$D_A; session-first jump=$J_B deny=$D_B"
 nft delete table inet authnft 2>/dev/null || true
+
+# 10.32: a flow the session never admitted carries no session id (#123).
+# The wire consequence is pinned in the netns harness (I7, I8); this
+# exercises the same property through the module itself: open a real
+# session, establish a flow to a listener OUTSIDE the session cgroup, and
+# read the id bits off its conntrack entry. The first #108 probe is why
+# this must go through the module and not a hand-built chain. UNREPLIED
+# entries are filtered for the same reason the harness filters them:
+# orphaned retransmits re-seed mid-stream ghosts that read ESTABLISHED.
+printf "${YELLOW}10.32: bystander flow carries no session id (untag rule, #123)${RESET}\n"
+if ! command -v conntrack >/dev/null 2>&1; then
+    pass "10.32: [SKIP] conntrack(8) not installed"
+else
+    nft delete table inet authnft 2>/dev/null || true
+    cat > "$FRAGMENT" <<'NFT'
+add rule inet authnft @session_chain socket cgroupv2 level 2 . ip saddr @session_v4 accept
+NFT
+    chown root:root "$FRAGMENT"; chmod 644 "$FRAGMENT"
+    if ! pamtester -I rhost=127.0.0.1 authnft_test "$TEST_USER" open_session >/dev/null 2>&1; then
+        fail "10.32: session did not open"
+    fi
+    grep -q 'authnft-untag' <(nft list table inet authnft 2>/dev/null) \
+        || { nft list table inet authnft >&2; fail "10.32: no untag rule in the session chain"; }
+
+    conntrack -D -p tcp --orig-port-dst 18085 >/dev/null 2>&1 || true
+    ncat -l 127.0.0.1 18085 --keep-open --exec /bin/cat >/dev/null 2>&1 &
+    NCAT_1032=$!
+    for _ in $(seq 1 50); do ss -Hltn 'sport = :18085' | grep -q . && break; sleep 0.1; done
+    if ! exec 8<>/dev/tcp/127.0.0.1/18085; then
+        kill $NCAT_1032 2>/dev/null; fail "10.32: bystander flow would not open"
+    fi
+    printf 'ping\n' >&8
+    read -t 3 -r _ <&8 || { kill $NCAT_1032 2>/dev/null; fail "10.32: bystander flow never worked"; }
+
+    BYST_MARK=$(conntrack -L -p tcp --orig-port-dst 18085 --state ESTABLISHED 2>/dev/null \
+        | grep -v UNREPLIED | grep -oP 'mark=\K[0-9]+' | head -1)
+    SID_BITS=$(( ${BYST_MARK:-0} & 0x00ffffff ))
+    exec 8<&-
+    kill $NCAT_1032 2>/dev/null
+
+    if [[ "$SID_BITS" -ne 0 ]]; then
+        fail "10.32: bystander flow carries session id bits $(printf '0x%06x' "$SID_BITS") (mark=${BYST_MARK:-0}) — the chain stamped a flow it never admitted"
+    fi
+    pass "10.32: bystander conntrack mark has zero session id bits (mark=${BYST_MARK:-0})"
+    nft delete table inet authnft 2>/dev/null || true
+fi
 
 printf "\n${BLUE}>>> INTEGRATION TESTS COMPLETE${RESET}\n"

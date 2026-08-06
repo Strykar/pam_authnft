@@ -96,6 +96,7 @@ static char *read_file(const char *path, size_t *out_len) {
  * the ct-state prefix with the unconditional rule they replaced. */
 #define GATE_UNSESSIONED_COMMENT "authnft-est-unsessioned"
 #define GATE_LIVE_COMMENT        "authnft-est-live"
+#define UNTAG_COMMENT            "authnft-untag"
 
 /* nftables takes these as literals, so they are spelled rather than
  * computed. Kept beside AUTHNFT_MARK_MASK/ADMIN in authnft.h by the
@@ -958,6 +959,33 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         return PAM_AUTH_ERR;
     }
     free(subst_buf);
+
+    /*
+     * Call 4: untag. Fragments admit; they do not admit everything they
+     * walk. The tag rule at the head of this chain stamps every new flow
+     * entering it, including flows no rule here accepts: those fall off
+     * the end and must leave with the mark they came in with, or this
+     * session's close revokes flows it never admitted (one login's
+     * logout cutting another's traffic, issue #123). Appended after the
+     * fragment's rules so an accepted flow never reaches it. Guarded by
+     * ct state new: established packets keep their mark, since washing a
+     * revoked id here would resurrect the flow through the unsessioned
+     * arm. Contains "ct mark", so the legacy sweep can never match it.
+     * A fragment rule that ends in `return` skips this; documented in
+     * INTEGRATIONS.
+     */
+    snprintf(cmd, sizeof(cmd),
+             "add rule inet %s %s ct state new ct mark set ct mark and "
+             AUTHNFT_MARK_ADMIN_STR " comment \"" UNTAG_COMMENT "\"",
+             TABLE_NAME, sd->chain_name);
+    DEBUG_PRINT("nft call 4 (untag rule):\n%s", cmd);
+    if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
+        pam_syslog(pamh, LOG_ERR, "authnft: untag rule failed: %s",
+                   nft_ctx_get_error_buffer(ctx));
+        nft_partial_cleanup(ctx, sd);
+        nft_ctx_free(ctx);
+        return PAM_SERVICE_ERR;
+    }
 
     nft_ctx_free(ctx);
     return PAM_SUCCESS;

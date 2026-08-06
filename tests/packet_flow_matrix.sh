@@ -222,6 +222,10 @@ RULES
 session_tag() { # <session-tag> <session-id>
     nft insert rule inet authnft "session_$1" ct state new ct mark set ct mark and 0xff000000 or "$2" \
         || die "tag rule for $1"
+    # The untag, as the module's call 4 appends it: unadmitted flows leave
+    # the chain with the mark they entered with (issue #123).
+    nft add rule inet authnft "session_$1" ct state new ct mark set ct mark and 0xff000000 comment '"untag"' \
+        || die "untag rule for $1"
     nft add element inet authnft live_sessions "{ $2 }" || die "live element for $1"
 }
 revoke() { nft delete element inet authnft live_sessions "{ $1 }" || die "revoke $1"; }
@@ -705,6 +709,7 @@ add set inet authnft session_${tag}_cg { typeof socket cgroupv2 level 2; flags t
 add element inet authnft session_${tag}_v4 { "$cg" . $src timeout 1d }
 add rule inet authnft session_$tag ct state new ct mark set ct mark and $ADMIN_MASK or $sid counter comment "tag-$tag"
 add rule inet authnft session_$tag socket cgroupv2 level 2 . ip saddr @session_${tag}_v4 tcp dport $SVC counter accept comment "sess-$tag"
+add rule inet authnft session_$tag ct state new ct mark set ct mark and $ADMIN_MASK comment "untag-$tag"
 add element inet authnft live_sessions { $sid }
 RULES
     session_built "$tag"
@@ -759,14 +764,14 @@ check I1 PASS "PASS" "session flow admitted while the session is live (control)"
 # retransmit after a conntrack flush re-seeds a mid-stream entry whose TCP
 # state reads ESTABLISHED despite never seeing a reply. D4's flush put one
 # of those ghosts in this reader's window. The real flow always has replies.
-session_mark() {
+flow_mark() { # <port>
     local rows n
-    rows=$(conntrack -L -p tcp --dport "$SVC" --state ESTABLISHED 2>/dev/null | grep -v UNREPLIED) || rows=""
+    rows=$(conntrack -L -p tcp --dport "$1" --state ESTABLISHED 2>/dev/null | grep -v UNREPLIED) || rows=""
     n=$(printf '%s' "$rows" | grep -c 'mark=') || n=0
     if [[ "$n" -ne 1 ]]; then echo "AMBIGUOUS:$n"; return 0; fi
     printf '0x%08x' "$(printf '%s' "$rows" | grep -oP 'mark=\K[0-9]+' | head -1)"
 }
-CTM_LIVE=$(session_mark)
+CTM_LIVE=$(flow_mark "$SVC")
 printf "       session entry mark: %s (want %s | %s)\n" "$CTM_LIVE" "$ADMIN_BITS" "$CTM_A"
 
 # Close, exactly as close_session would: drop the live-sessions element,
@@ -811,6 +816,68 @@ else
         "the session tag preserved the admin's mark bits ($CTM_LIVE, admin slice $CTM_ADMIN)"
 fi
 exec 7<&-; exec 8<&-
+
+# I7: the bystander. The jump into a session chain is unconditional and the
+# tag rule stamps every new flow the chain sees, admitted or not. A flow the
+# SITE admits with the stateful-new idiom (ct state new accept + trailing
+# deny) then depends entirely on the gate for its established packets. If
+# the stamp sticks, this session's close revokes a flow it never admitted.
+# PASS is the contract; BLOCK here is the pollution bug on the wire, and
+# the mark control catches the stamp even where a site idiom would mask it.
+table_down
+nft -f - <<RULES || die "I7: gate setup"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add set inet authnft live_sessions { type mark; }
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK 0x0 counter accept comment "est-unsessioned"
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK @live_sessions counter accept comment "est-live"
+RULES
+ctmark_up a "$CG_A" "$OK_SRC" "$CTM_A"
+nft add rule inet authnft filter ct state new tcp dport 19102 accept comment '"site-new-19102"' || die "I7: site accept"
+site_deny 19102
+hold_open 7 19102 || die "I7: bystander flow would not open"
+printf 'one\n' >&7; read -t 3 -r _ <&7 || die "I7: bystander flow never worked"
+I7_MARK=$(flow_mark 19102)
+printf "       bystander mark: %s (sid bits must be 0; the session's id is %s)\n" "$I7_MARK" "$CTM_A"
+if [[ "$I7_MARK" != AMBIGUOUS:* ]] && (( (I7_MARK & SESS_MASK) != 0 )); then
+    printf "${RED}[FAIL]${RESET} I7 mark control: bystander carries session id bits 0x%06x\n" \
+        $(( I7_MARK & SESS_MASK )) >&2
+    RC=1
+fi
+revoke "$CTM_A"
+module_down a
+drain 7; printf 'two\n' >&7
+if read -t 3 -r _ <&7; then I7=PASS; else I7=BLOCK; fi
+check I7 PASS "$I7" "bystander flow survives the session's close (it was never the session's to revoke)"
+counter_moved I7 est-unsessioned 0 "the unsessioned arm carried it after close"
+exec 7<&-
+
+# I8: the same stamp across sessions. With two sessions live, an unadmitted
+# new flow walks both chains and keeps the LAST chain's id (head-inserted
+# jumps walk newest-first, so the last is the oldest session). Closing that
+# session must not end a flow the other session's era established.
+table_down
+nft -f - <<RULES || die "I8: gate setup"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add set inet authnft live_sessions { type mark; }
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK 0x0 counter accept comment "est-unsessioned"
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK @live_sessions counter accept comment "est-live"
+RULES
+ctmark_up a "$CG_A" "$OK_SRC" "$CTM_A"
+ctmark_up b "$CG_B" "$OK_SRC" "$CTM_B"
+nft add rule inet authnft filter ct state new tcp dport 19102 accept comment '"site-new-19102"' || die "I8: site accept"
+site_deny 19102
+hold_open 7 19102 || die "I8: bystander flow would not open"
+printf 'one\n' >&7; read -t 3 -r _ <&7 || die "I8: bystander flow never worked"
+printf "       bystander mark: %s (walked b then a; a's id is %s)\n" "$(flow_mark 19102)" "$CTM_A"
+revoke "$CTM_A"
+module_down a
+drain 7; printf 'two\n' >&7
+if read -t 3 -r _ <&7; then I8=PASS; else I8=BLOCK; fi
+check I8 PASS "$I8" "one session's close does not revoke a flow it never admitted (two sessions live)"
+revoke "$CTM_B"; module_down b
+exec 7<&-
 
 # ======================================================================
 note "H. Packet traces: the kernel's own account of the traversal"
@@ -867,7 +934,7 @@ done
 # A section that dies quietly, or an arm that is edited out, shows up here
 # as a short matrix rather than as a clean pass. This is the D3 class the
 # codex bot found: the run reported success for cases it never executed.
-EXPECTED_CASES=38
+EXPECTED_CASES=40
 if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
     printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
         "${#ROWS[@]}" "$EXPECTED_CASES"
