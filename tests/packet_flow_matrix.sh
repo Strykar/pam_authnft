@@ -155,7 +155,8 @@ check() { # <case-id> <expected PASS|BLOCK> <observed> <what this pins>
 
 # ---- the module's own state, built as nft_handler_setup builds it -------
 # Call 1 order: table, shared chain, ct rule, per-session chain, three sets,
-# element. Call 2 appends the jump. The trailing site deny is placement C
+# element. The fragment and untag then fill the chain, and the jump lands
+# last, exposing a complete chain. The trailing site deny is placement C
 # from issue #105, the only one that admits traffic; every functional case
 # below therefore runs on the arrangement that actually works.
 # Setup failures are fatal, never observations. A half-built table has an
