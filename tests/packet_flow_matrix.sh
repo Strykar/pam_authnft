@@ -222,6 +222,10 @@ RULES
 session_tag() { # <session-tag> <session-id>
     nft insert rule inet authnft "session_$1" ct state new ct mark set ct mark and 0xff000000 or "$2" \
         || die "tag rule for $1"
+    # The untag, as the module's call 4 appends it: unadmitted flows leave
+    # the chain with the mark they entered with (issue #123).
+    nft add rule inet authnft "session_$1" ct state new ct mark set ct mark and 0xff000000 comment '"untag"' \
+        || die "untag rule for $1"
     nft add element inet authnft live_sessions "{ $2 }" || die "live element for $1"
 }
 revoke() { nft delete element inet authnft live_sessions "{ $1 }" || die "revoke $1"; }
@@ -705,6 +709,7 @@ add set inet authnft session_${tag}_cg { typeof socket cgroupv2 level 2; flags t
 add element inet authnft session_${tag}_v4 { "$cg" . $src timeout 1d }
 add rule inet authnft session_$tag ct state new ct mark set ct mark and $ADMIN_MASK or $sid counter comment "tag-$tag"
 add rule inet authnft session_$tag socket cgroupv2 level 2 . ip saddr @session_${tag}_v4 tcp dport $SVC counter accept comment "sess-$tag"
+add rule inet authnft session_$tag ct state new ct mark set ct mark and $ADMIN_MASK comment "untag-$tag"
 add element inet authnft live_sessions { $sid }
 RULES
     session_built "$tag"
