@@ -315,9 +315,9 @@ Trust model
   was made, and adding the rule afterwards does not rescue
   it. The entry conntrack builds mid-stream does not satisfy
   `ct state established` for that flow's inbound data
-  packets, so a site deny takes them (case C3). Hosts whose
-  ruleset is already stateful, which is the normal case, are
-  unaffected.
+  packets, so a site deny takes them (case C3, issue #111).
+  Hosts whose ruleset is already stateful, which is the
+  normal case, are unaffected.
 
 
 Seccomp

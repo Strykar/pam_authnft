@@ -179,13 +179,18 @@ session kept running to its natural end, because the shared
 established-accept fired before any session rule and conntrack never
 heard about the teardown (issue #103).
 
-Flows the module never admitted are untagged and unaffected, which is
-what carries the SSH connection the login arrived on. Ids are never
+Flows the module never admitted end up untagged and unaffected, which is
+what carries the SSH connection the login arrived on and any flow the
+site's own rules admit while a session happens to be open: an untag rule
+at the end of each session chain restores the mark of flows the chain
+walked but did not accept, so one login's logout cannot cut another
+flow's traffic (issue #123). Ids are never
 reused, since a recycled id would resurrect the flows its previous holder
-revoked. Cases D1 to D4 and I1 to I6 of `make test-packet-flow` pin the
-behaviour (D4 isolates the conntrack-flush fallback for sessions that
-never received an id), and integration case 10.27 exercises the id
-lifecycle through the module.
+revoked. Cases D1 to D4, I1 to I8 and U1 of `make test-packet-flow` pin
+the behaviour (D4 isolates the conntrack-flush fallback for sessions that
+never received an id; U1 is the UDP leg), and integration cases 10.27 and
+10.32 exercise the id lifecycle and the untag boundary through the
+module.
 
 The module only ever adds `accept` rules, so it grants; it never denies.
 Whatever denies is the site's, and it has to sit somewhere the module's

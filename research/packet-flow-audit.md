@@ -219,6 +219,26 @@ INTEGRATIONS 4.5 now says so directly: rules an included file adds to the
 shared chain outlive every session and keep acting on traffic, and retiring
 them is the site's job.
 
+## Congruence audit (2026-08-06)
+
+Every behavioural sentence in the shipped docs that cites a packet-flow,
+integration or packet-match case was checked against the arm it cites;
+every case id cited resolves against the current case set (A1-A5, B1-B3,
+C1-C3, D1-D4, E1-E11, F1-F3, G1-G5, I1-I8, U1; integration 10.x through
+10.32; PM1-PM3). Dispositions:
+
+| Claim | Where | Pinned by | Disposition |
+|---|---|---|---|
+| Revocation bound: no access after logout, flush fallback for no-id sessions | ASSURANCE_CASE C3, CONCEPTS | D1-D4, I1-I8, U1, 10.27, 10.32 | corrected: pins extended, untag boundary stated |
+| Flows never admitted end up untagged and unaffected | ASSURANCE_CASE C3, CONCEPTS | I3, I7, I8, 10.32 | corrected: was uncited and, between the gate landing and #123's fix, false; now states the untag mechanism's tested outcome |
+| Deny placement contract (in-chain safe, separate base chain broken, reboot recipe) | ADMIN_GUIDE, CONCEPTS | E1-E11, 10.26, 10.29, 10.31 | current; added the site-accept composition sentence (I7, I8, U1) |
+| Class B survival and its conntrack precondition | ARCHITECTURE | C1, C2, C3 | current; issue #111 now cited beside the C3 case id |
+| Shared-chain fragment rules outlive sessions | INTEGRATIONS 4.5/4.6 | G4, G5 | current; added the walked-is-not-admitted paragraph and the fragment `return` escape |
+| Setup transaction structure and failure handling | INTEGRATIONS 4.5 | fault matrix (tests/audit) | corrected: said three nft calls and orphaned state; it is four calls since the untag, with best-effort rollback and self-heal reap |
+
+The check is now a DOC_CHECKLIST change type, so the next case-set
+change re-runs it instead of rediscovering it.
+
 ### Correction: real finding, wrong instrument (issue #108)
 
 The include-boundary finding was real. At the time it was found,
