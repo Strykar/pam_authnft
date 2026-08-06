@@ -339,7 +339,9 @@ classification time, `socket cgroupv2 level 2` reads the socket's
 originating cgroup and matches it against the set — binding the firewall
 rule to the session without referencing PIDs, UIDs, or usernames. The
 24-hour timeout is a safety net; explicit deletion at logout is the primary
-cleanup mechanism.
+cleanup mechanism. A leaked element whose scope is already gone lists as a
+raw numeric id; nftables releases after 1.1.6 (commit 49e41823) replay such
+listings cleanly and can delete the element by that id.
 
 ### Runtime observability (session JSON + audit events)
 
