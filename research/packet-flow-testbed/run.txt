@@ -1,99 +1,149 @@
-[1;34m>>> PACKET-FLOW MATRIX (kernel 7.1.5-arch1-1)[0m
+>>> PACKET-FLOW MATRIX (kernel 7.1.5-arch1-2)
 
-[1;33mA. Admission: does an open session actually let traffic through?[0m
-[1;32m[ OK ][0m A1     PASS   in-session socket, allowed source, allowed port
-[1;32m[ OK ][0m A2     BLOCK  same session, port the fragment does not name
-[1;32m[ OK ][0m A3     BLOCK  allowed port, source not in the session set
-       arrival controls: deny-19101=2 deny-19100=2 sess-a=1
+A. Admission: does an open session actually let traffic through?
+[ OK ] A1     PASS   in-session socket, allowed source, allowed port
+[ OK ] A2     BLOCK  same session, port the fragment does not name
+[ OK ] A3     BLOCK  allowed port, source not in the session set
+       A2 control: 'deny-19101' 0 -> 2 (the A2 packets arrived and were dropped, not never sent)
+       A3 control: 'deny-19100' 0 -> 2 (the A3 packets arrived and were dropped, not never sent)
+       sess-a=1
+[ OK ] A4     PASS   same session over v6, source in the v6 set
+       A4 control: 'sess-a-v6' 0 -> 1 (the v6 set match did the admitting)
+[ OK ] A5     BLOCK  v6 source no longer in the set
+       A5 control: 'deny-19106' 0 -> 2 (the v6 packets arrived and were dropped)
 
-[1;33mB. Isolation: one session's rules must not admit another's traffic[0m
-[1;32m[ OK ][0m B1     BLOCK  bob's socket, only alice's session open
-[1;32m[ OK ][0m B2     PASS   bob's socket once bob's own session is open
-[1;32m[ OK ][0m B3     BLOCK  bob's port from a source in neither session's set
+B. Isolation: one session's rules must not admit another's traffic
+[ OK ] B1     BLOCK  bob's socket, only alice's session open
+[ OK ] B2     PASS   bob's socket once bob's own session is open
+[ OK ] B3     BLOCK  bob's port from a source in neither session's set
 
-[1;33mC. The ct rule: the docs call it load-bearing, so prove it bears load[0m
-[1;32m[ OK ][0m C1     PASS   pre-session (Class B) flow survives, ct rule present
-[1;32m[ OK ][0m C2     BLOCK  same flow with the ct rule deleted
-2026/07/29 00:44:59 socat[1389763] E read(6, 0x558fec790000, 8192): Connection reset by peer
-[1;32m[ OK ][0m C3     BLOCK  flow that predates conntrack tracking, ct rule added after
-       ct-accept=5 deny-19101=6 (rule present, data packets still dropped)
+C. The ct rule: the docs call it load-bearing, so prove it bears load
+[ OK ] C1     PASS   pre-session (Class B) flow survives, ct rule present
+[ OK ] C2     BLOCK  same flow with the ct rule deleted
+2026/08/06 21:19:51 socat[3127333] E read(6, 0x563fef0dc000, 8192): Connection reset by peer
+[ OK ] C3     BLOCK  flow that predates conntrack tracking, ct rule added after
+       C3 control: 'deny-19101' 0 -> 6 (the data packets landed in the deny despite the ct rule)
+       ct-accept=3 (nonzero: conntrack picks the flow up mid-stream in the reply direction)
 
-[1;33mD. Teardown: what close_session does and does not revoke (#103)[0m
-[1;32m[ OK ][0m D1     PASS   flow admitted during the session, after close_session
-2026/07/29 00:45:06 socat[1390035] E read(6, 0x558fec790000, 8192): Connection reset by peer
-[1;32m[ OK ][0m D2     BLOCK  new flow after close_session
-[1;32m[ OK ][0m D3     BLOCK  same flow after a conntrack flush by source address
+D. Teardown: what close_session does and does not revoke (#103)
+2026/08/06 21:19:57 socat[3127737] E read(6, 0x563fef0dc000, 8192): Connection reset by peer
+[ OK ] D1     BLOCK  flow admitted during the session, revoked at close_session
+[ OK ] D2     BLOCK  new flow after close_session
+[ OK ] D3     BLOCK  same flow after a conntrack flush by source address
+[ OK ] D4     BLOCK  untagged flow revoked by a conntrack flush alone (the no-id fallback)
+       D4 control: 'deny-19101' 0 -> 5 (the post-flush packets arrived and were dropped)
 
-[1;33mE. Enforcement placement: where the site deny has to go (#105)[0m
-[1;32m[ OK ][0m E1     PASS   deny appended to the shared chain AFTER the jump
-[1;32m[ OK ][0m E2     BLOCK  deny added BEFORE the jump: session chain shadowed
-       shadow control: sess-a=0 (0 proves the jump was never reached)
-[1;32m[ OK ][0m E3     BLOCK  site deny as a separate base chain at priority filter
-       shadow control: sess-a=3 (>0 proves the module accepted and was overruled)
+E. Enforcement placement: where the site deny has to go (#105)
+[ OK ] E1     PASS   deny appended to the shared chain AFTER the jump
+2026/08/06 21:20:09 socat[3127820] E read(6, 0x563fef0dc000, 8192): Connection reset by peer
+[ OK ] E2     BLOCK  deny added BEFORE the jump: session chain shadowed
+       E2 control: 'sess-a' stayed 0 (the jump was never reached)
+[ OK ] E3     BLOCK  site deny as a separate base chain at priority filter
+       E3 control: 'sess-a' 0 -> 2 (the module accepted and was overruled afterwards)
+[ OK ] E4     BLOCK  session opened after the site deny: its jump is shadowed
+       E4 control: 'sess-b' stayed 0 (bob's jump was never reached)
+[ OK ] E5     PASS   the session that predates the deny still works (E4 control)
+[ OK ] E6     PASS   same session, jump positioned after the ct rule (#105 fix)
+       E6 control: 'sess-b' 0 -> 1 (bob's jump was reached this time)
+[ OK ] E7     BLOCK  deny still denies with the jump positioned (E6 control)
+[ OK ] E8     PASS   deny placed BEFORE any session, jump positioned after the ct rule
+       E8 control: 'sess-a' 0 -> 1 (the jump ran ahead of a deny that predates it)
+[ OK ] E9     PASS   established traffic short-circuits at the ct rule, never entering a session chain
+       session-chain entries 1 -> 1 (must not move), ct-accept 6 -> 15 (must move)
+[ OK ] E10    PASS   deny restored at boot, before the gate existed; gate and jump inserted above it
+       E10 control: 'sess-a' 0 -> 1 (admitted by the intended rule, not by accident)
+[ OK ] E11    BLOCK  the boot-restored deny still denies (E10 control)
+       E11 control: 'deny-19100' 0 -> 2 (the boot-restored deny is live, not bypassed)
 
-[1;33mF. Complex fragments: a session chain that denies as well as allows[0m
-[1;32m[ OK ][0m F1     PASS   fragment allow rule, no site deny in play
-[1;32m[ OK ][0m F2     BLOCK  fragment deny rule inside the session chain
-       fragment deny counter: 2
-[1;32m[ OK ][0m F3     PASS   fragment deny does not outlive the session
+F. Complex fragments: a session chain that denies as well as allows
+[ OK ] F1     PASS   fragment allow rule, no site deny in play
+       F1 control: 'sess-a' 0 -> 1 (admitted by the intended rule, not by accident)
+[ OK ] F2     BLOCK  fragment deny rule inside the session chain
+       F2 control: 'sess-a-deny' 0 -> 2 (the fragment's own deny did the dropping)
+[ OK ] F3     PASS   fragment deny does not outlive the session
+       F3 control: the fragment deny rule is gone, not merely unmatched
 
-[1;33mG. Cleanup boundary: what close_session leaves behind[0m
-[1;32m[ OK ][0m G1     BLOCK  per-session chain and sets are gone after close
-[1;32m[ OK ][0m G2     PASS   shared chain and its ct rule survive close (by design)
-[1;32m[ OK ][0m G3     PASS   chain a fragment created survives close (INTEGRATIONS 4.5)
-[1;32m[ OK ][0m G4     PASS   rule a fragment put in the shared chain survives close
-[1;32m[ OK ][0m G5     BLOCK  leftover shared-chain fragment rule still drops after close
+G. Cleanup boundary: what close_session leaves behind
+[ OK ] G1     BLOCK  per-session chain and sets are gone after close
+[ OK ] G2     PASS   shared chain and its ct rule survive close (by design)
+[ OK ] G3     PASS   chain a fragment created survives close (INTEGRATIONS 4.5)
+[ OK ] G4     PASS   rule a fragment put in the shared chain survives close
+[ OK ] G5     BLOCK  leftover shared-chain fragment rule still drops after close
+       G5 control: 'frag-shared-deny' 0 -> 2 (the leftover fragment rule did the dropping)
 
-[1;33mH. Packet traces: the kernel's own account of the traversal[0m
+I. Conntrack revocation: the ct mark gate shipped for #103
+[ OK ] I1     PASS   session flow admitted while the session is live (control)
+       session entry mark: 0xab000001 (want 0xab000000 | 0x000001)
+       jumps left after close: 0 (0 proves the teardown transaction committed)
+[ OK ] I2     BLOCK  flow admitted during the session, after close (D1 fixed)
+[ OK ] I3     PASS   untagged flow survives the same close (the SSH connection)
+       I3 control: 'est-unsessioned' 12 -> 15 (admitted by the intended rule, not by accident)
+       est-unsessioned=15 est-live=7
+[ OK ] I4     PASS   reusing a session id resurrects the revoked flow (why ids must not repeat)
+[ OK ] I5     BLOCK  a fresh id does not resurrect it (I4 control)
+[ OK ] I6     PASS   the session tag preserved the admin's mark bits (0xab000001, admin slice 0xab000000)
+       bystander mark: 0x00000000 (sid bits must be 0; the session's id is 0x000001)
+2026/08/06 21:20:36 socat[3128434] E read(6, 0x557fa0b8d000, 8192): Connection reset by peer
+[ OK ] I7     PASS   bystander flow survives the session's close (it was never the session's to revoke)
+       I7 control: 'est-unsessioned' 0 -> 14 (the unsessioned arm carried it after close)
+       bystander mark: 0x00000000 (walked b then a; a's id is 0x000001)
+[ OK ] I8     PASS   one session's close does not revoke a flow it never admitted (two sessions live)
+[ OK ] U1     BLOCK  udp flow admitted during the session, revoked at close
+       U1 control: 'deny-udp-19107' 0 -> 1 (the post-close datagrams arrived and were dropped)
 
-    [1;33madmitted: session rule accepts[0m
-      trace id d6ec0625 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
-      trace id d6ec0625 inet authnft trace_hook policy accept 
-      trace id d6ec0625 inet authnft filter rule jump session_a (verdict jump session_a)
-      trace id d6ec0625 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
-      trace id 3820b1bb inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
-      trace id 3820b1bb inet authnft trace_hook policy accept 
-      trace id 3820b1bb inet authnft filter rule ct state established,related counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
-      trace id d6ec0625 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
-2026/07/29 00:45:20 socat[1390571] E read(6, 0x556bc9c8e000, 8192): Connection reset by peer
+H. Packet traces: the kernel's own account of the traversal
 
-    [1;33mdenied: port the session does not own[0m
-      trace id 51dc07d9 inet authnft trace_hook rule tcp dport 19101 meta nftrace set 1 (verdict continue)
-      trace id 51dc07d9 inet authnft trace_hook policy accept 
-      trace id 51dc07d9 inet authnft filter rule jump session_a (verdict jump session_a)
-      trace id 51dc07d9 inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
-      trace id 86c2bafc inet authnft trace_hook rule tcp dport 19101 meta nftrace set 1 (verdict continue)
-      trace id 86c2bafc inet authnft trace_hook policy accept 
-      trace id 86c2bafc inet authnft filter rule jump session_a (verdict jump session_a)
-      trace id 86c2bafc inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
+    admitted: session rule accepts
+      trace id bc7e16e3 inet authnft filter rule jump session_a (verdict jump session_a)
+      trace id bc7e16e3 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
+      trace id 726920ff inet authnft filter rule ct state established,related ct mark & 0x00ffffff == 0x00000000 counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+      trace id bc7e16e3 inet authnft filter rule ct state established,related ct mark & 0x00ffffff == 0x00000000 counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+      trace id 2bcac080 inet authnft filter rule ct state established,related ct mark & 0x00ffffff == 0x00000000 counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+      trace id cc36db20 inet authnft filter rule ct state established,related ct mark & 0x00ffffff == 0x00000000 counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
+      trace id cc36db20 inet authnft filter rule ct state established,related ct mark & 0x00ffffff == 0x00000000 counter packets 0 bytes 0 accept comment "ct-accept" (verdict accept)
 
-    [1;33mdenied by a separate chain the module cannot see (#105)[0m
-      trace id 8bad7325 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
-      trace id 8bad7325 inet authnft trace_hook policy accept 
-      trace id 8bad7325 inet authnft filter rule jump session_a (verdict jump session_a)
-      trace id 8bad7325 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
-      trace id 8bad7325 inet authnft sitedeny policy drop 
-      trace id fcadbbd4 inet authnft trace_hook rule tcp dport 19100 meta nftrace set 1 (verdict continue)
-      trace id fcadbbd4 inet authnft trace_hook policy accept 
-      trace id fcadbbd4 inet authnft filter rule jump session_a (verdict jump session_a)
+    denied: port the session does not own
+      trace id 3871923e inet authnft filter rule jump session_a (verdict jump session_a)
+      trace id 3871923e inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
+      trace id 6e6a2b58 inet authnft filter rule jump session_a (verdict jump session_a)
+      trace id 6e6a2b58 inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
 
-[1;34m>>> MATRIX[0m
+    denied by a separate chain the module cannot see (#105)
+      trace id 7d526d5f inet authnft filter rule jump session_a (verdict jump session_a)
+      trace id 7d526d5f inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
+      trace id 7d526d5f inet authnft sitedeny policy drop 
+      trace id 93142d22 inet authnft filter rule jump session_a (verdict jump session_a)
+      trace id 93142d22 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4 tcp dport 19100 counter packets 0 bytes 0 accept comment "sess-a" (verdict accept)
+      trace id 93142d22 inet authnft sitedeny policy drop 
+
+>>> MATRIX
     CASE   EXPECTED OBSERVED PINS
     A1     PASS     PASS     in-session socket, allowed source, allowed port
     A2     BLOCK    BLOCK    same session, port the fragment does not name
     A3     BLOCK    BLOCK    allowed port, source not in the session set
+    A4     PASS     PASS     same session over v6, source in the v6 set
+    A5     BLOCK    BLOCK    v6 source no longer in the set
     B1     BLOCK    BLOCK    bob's socket, only alice's session open
     B2     PASS     PASS     bob's socket once bob's own session is open
     B3     BLOCK    BLOCK    bob's port from a source in neither session's set
     C1     PASS     PASS     pre-session (Class B) flow survives, ct rule present
     C2     BLOCK    BLOCK    same flow with the ct rule deleted
     C3     BLOCK    BLOCK    flow that predates conntrack tracking, ct rule added after
-    D1     PASS     PASS     flow admitted during the session, after close_session
+    D1     BLOCK    BLOCK    flow admitted during the session, revoked at close_session
     D2     BLOCK    BLOCK    new flow after close_session
     D3     BLOCK    BLOCK    same flow after a conntrack flush by source address
+    D4     BLOCK    BLOCK    untagged flow revoked by a conntrack flush alone (the no-id fallback)
     E1     PASS     PASS     deny appended to the shared chain AFTER the jump
     E2     BLOCK    BLOCK    deny added BEFORE the jump: session chain shadowed
     E3     BLOCK    BLOCK    site deny as a separate base chain at priority filter
+    E4     BLOCK    BLOCK    session opened after the site deny: its jump is shadowed
+    E5     PASS     PASS     the session that predates the deny still works (E4 control)
+    E6     PASS     PASS     same session, jump positioned after the ct rule (#105 fix)
+    E7     BLOCK    BLOCK    deny still denies with the jump positioned (E6 control)
+    E8     PASS     PASS     deny placed BEFORE any session, jump positioned after the ct rule
+    E9     PASS     PASS     established traffic short-circuits at the ct rule, never entering a session chain
+    E10    PASS     PASS     deny restored at boot, before the gate existed; gate and jump inserted above it
+    E11    BLOCK    BLOCK    the boot-restored deny still denies (E10 control)
     F1     PASS     PASS     fragment allow rule, no site deny in play
     F2     BLOCK    BLOCK    fragment deny rule inside the session chain
     F3     PASS     PASS     fragment deny does not outlive the session
@@ -102,8 +152,20 @@
     G3     PASS     PASS     chain a fragment created survives close (INTEGRATIONS 4.5)
     G4     PASS     PASS     rule a fragment put in the shared chain survives close
     G5     BLOCK    BLOCK    leftover shared-chain fragment rule still drops after close
+    I1     PASS     PASS     session flow admitted while the session is live (control)
+    I2     BLOCK    BLOCK    flow admitted during the session, after close (D1 fixed)
+    I3     PASS     PASS     untagged flow survives the same close (the SSH connection)
+    I4     PASS     PASS     reusing a session id resurrects the revoked flow (why ids must not repeat)
+    I5     BLOCK    BLOCK    a fresh id does not resurrect it (I4 control)
+    I6     PASS     PASS     the session tag preserved the admin's mark bits (0xab000001, admin slice 0xab000000)
+    I7     PASS     PASS     bystander flow survives the session's close (it was never the session's to revoke)
+    I8     PASS     PASS     one session's close does not revoke a flow it never admitted (two sessions live)
+    U1     BLOCK    BLOCK    udp flow admitted during the session, revoked at close
 
-[1;34m>>> EVERY CASE MATCHED THE WIRE (kernel 7.1.5-arch1-1)[0m
-2026/07/29 00:45:27 socat[1388959] W exiting on signal 15
-2026/07/29 00:45:27 socat[1388991] W exiting on signal 15
-2026/07/29 00:45:27 socat[1388971] W exiting on signal 15
+>>> EVERY CASE MATCHED THE WIRE (kernel 7.1.5-arch1-2)
+2026/08/06 21:20:47 socat[3127238] W exiting on signal 15
+2026/08/06 21:20:47 socat[3129230] W exiting on signal 15
+2026/08/06 21:20:47 socat[3127071] W exiting on signal 15
+2026/08/06 21:20:47 socat[3127057] W exiting on signal 15
+2026/08/06 21:20:47 socat[3127064] W exiting on signal 15
+2026/08/06 21:20:47 socat[3127792] W exiting on signal 15
