@@ -1,16 +1,16 @@
-trace id 51dc07d9 inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 2302225379 
-trace id 51dc07d9 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 18518 ip protocol tcp ip length 60 tcp sport 47859 tcp dport 19101 tcp flags == syn tcp window 65535 
-trace id 51dc07d9 inet authnft trace_hook rule tcp dport 19101 meta nftrace set 1 (verdict continue)
-trace id 51dc07d9 inet authnft trace_hook policy accept 
-trace id 51dc07d9 inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 2302225379 
-trace id 51dc07d9 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 18518 ip protocol tcp ip length 60 tcp sport 47859 tcp dport 19101 tcp flags == syn tcp window 65535 
-trace id 51dc07d9 inet authnft filter rule jump session_a (verdict jump session_a)
-trace id 51dc07d9 inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
-trace id 86c2bafc inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 2302225379 
-trace id 86c2bafc inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 18519 ip protocol tcp ip length 60 tcp sport 47859 tcp dport 19101 tcp flags == syn tcp window 65535 
-trace id 86c2bafc inet authnft trace_hook rule tcp dport 19101 meta nftrace set 1 (verdict continue)
-trace id 86c2bafc inet authnft trace_hook policy accept 
-trace id 86c2bafc inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 2302225379 
-trace id 86c2bafc inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 18519 ip protocol tcp ip length 60 tcp sport 47859 tcp dport 19101 tcp flags == syn tcp window 65535 
-trace id 86c2bafc inet authnft filter rule jump session_a (verdict jump session_a)
-trace id 86c2bafc inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
+trace id 3871923e inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 2877049933 
+trace id 3871923e inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 30792 ip protocol tcp ip length 60 tcp sport 48347 tcp dport 19101 tcp flags == syn tcp window 65535 
+trace id 3871923e inet authnft trace_hook rule tcp dport 19101 meta nftrace set 1 (verdict continue)
+trace id 3871923e inet authnft trace_hook policy accept 
+trace id 3871923e inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 2877049933 
+trace id 3871923e inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 30792 ip protocol tcp ip length 60 tcp sport 48347 tcp dport 19101 tcp flags == syn tcp window 65535 
+trace id 3871923e inet authnft filter rule jump session_a (verdict jump session_a)
+trace id 3871923e inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)
+trace id 6e6a2b58 inet authnft trace_hook conntrack: ct direction original ct state new ct status confirmed ct id 2877049933 
+trace id 6e6a2b58 inet authnft trace_hook packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 30793 ip protocol tcp ip length 60 tcp sport 48347 tcp dport 19101 tcp flags == syn tcp window 65535 
+trace id 6e6a2b58 inet authnft trace_hook rule tcp dport 19101 meta nftrace set 1 (verdict continue)
+trace id 6e6a2b58 inet authnft trace_hook policy accept 
+trace id 6e6a2b58 inet authnft filter conntrack: ct direction original ct state new ct status confirmed ct id 2877049933 
+trace id 6e6a2b58 inet authnft filter packet: iif "lo" ip saddr 127.0.0.1 ip daddr 127.0.0.1 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 30793 ip protocol tcp ip length 60 tcp sport 48347 tcp dport 19101 tcp flags == syn tcp window 65535 
+trace id 6e6a2b58 inet authnft filter rule jump session_a (verdict jump session_a)
+trace id 6e6a2b58 inet authnft filter rule tcp dport 19101 counter packets 0 bytes 0 drop comment "deny-19101" (verdict drop)

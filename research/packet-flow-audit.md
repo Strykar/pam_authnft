@@ -2,7 +2,10 @@
 
 Run: `sudo make test-packet-flow` (harness: `tests/packet_flow_matrix.sh`).
 Captured run and `nft monitor trace` output: `research/packet-flow-testbed/`.
-Kernel 7.1.5-arch1-1, 35 cases, every one matched its expected verdict.
+Kernel 7.1.5-arch1-2, 43 cases, every one matched its expected verdict.
+Captured with `sudo env AUTHNFT_TRACE_DIR=research/packet-flow-testbed/traces
+./tests/packet_flow_matrix.sh`, colours stripped; run.txt is that output
+verbatim, so the matrix below can be regenerated from it.
 
 Why this exists: the suite had ten packet-level assertions and not one of
 them ever watched a packet be denied. Every existing test builds a
@@ -26,6 +29,8 @@ key is a cgroup path.
     A1     PASS     PASS     in-session socket, allowed source, allowed port
     A2     BLOCK    BLOCK    same session, port the fragment does not name
     A3     BLOCK    BLOCK    allowed port, source not in the session set
+    A4     PASS     PASS     same session over v6, source in the v6 set
+    A5     BLOCK    BLOCK    v6 source no longer in the set
     B1     BLOCK    BLOCK    bob's socket, only alice's session open
     B2     PASS     PASS     bob's socket once bob's own session is open
     B3     BLOCK    BLOCK    bob's port from a source in neither session's set
@@ -35,6 +40,7 @@ key is a cgroup path.
     D1     BLOCK    BLOCK    flow admitted during the session, revoked at close_session
     D2     BLOCK    BLOCK    new flow after close_session
     D3     BLOCK    BLOCK    same flow after a conntrack flush by source address
+    D4     BLOCK    BLOCK    untagged flow revoked by a conntrack flush alone (the no-id fallback)
     E1     PASS     PASS     deny appended to the shared chain AFTER the jump
     E2     BLOCK    BLOCK    deny added BEFORE the jump: session chain shadowed
     E3     BLOCK    BLOCK    site deny as a separate base chain at priority filter
@@ -44,6 +50,8 @@ key is a cgroup path.
     E7     BLOCK    BLOCK    deny still denies with the jump positioned (E6 control)
     E8     PASS     PASS     deny placed BEFORE any session, jump positioned after the ct rule
     E9     PASS     PASS     established traffic short-circuits at the ct rule, never entering a session chain
+    E10    PASS     PASS     deny restored at boot, before the gate existed; gate and jump inserted above it
+    E11    BLOCK    BLOCK    the boot-restored deny still denies (E10 control)
     F1     PASS     PASS     fragment allow rule, no site deny in play
     F2     BLOCK    BLOCK    fragment deny rule inside the session chain
     F3     PASS     PASS     fragment deny does not outlive the session
@@ -58,13 +66,18 @@ key is a cgroup path.
     I4     PASS     PASS     reusing a session id resurrects the revoked flow (why ids must not repeat)
     I5     BLOCK    BLOCK    a fresh id does not resurrect it (I4 control)
     I6     PASS     PASS     the session tag preserved the admin's mark bits (0xab000001, admin slice 0xab000000)
+    I7     PASS     PASS     bystander flow survives the session's close (it was never the session's to revoke)
+    I8     PASS     PASS     one session's close does not revoke a flow it never admitted (two sessions live)
+    U1     BLOCK    BLOCK    udp flow admitted during the session, revoked at close
 ```
 
-Negative cases carry arrival controls: the deny counters have to move, so a
-BLOCK caused by traffic never being sent reads as a failure, not a pass.
-E2 and E3 carry shadow controls that distinguish the two ways a packet can
-be denied. In E2 the session counter is 0, meaning the jump was never
-reached. In E3 it is 3, meaning the module accepted the packet and was
+Every control is asserted, not printed: counter_moved and counter_static
+fail the run when a counter disagrees with the story. Negative cases carry
+arrival controls (the deny counter has to move, so a BLOCK caused by
+traffic never being sent reads as a failure, not a pass), and the E arms
+carry shadow controls that distinguish the two ways a packet can be
+denied: in E2 the session counter stays 0, meaning the jump was never
+reached; in E3 it moves, meaning the module accepted the packet and was
 overruled afterwards. Same verdict on the wire, opposite causes.
 
 ## The traces
@@ -72,12 +85,15 @@ overruled afterwards. Same verdict on the wire, opposite causes.
 `nft monitor trace` is the kernel narrating the traversal, so it settles
 questions that counters can only imply.
 
-Admitted (`traces/admitted.txt`):
+Admitted (`traces/admitted.txt`; first the SYN through the session chain,
+then an established packet short-circuiting at the gate's unsessioned arm):
 
 ```
 inet authnft filter rule jump session_a (verdict jump session_a)
 inet authnft session_a rule socket cgroupv2 level 2 . ip saddr @session_a_v4
     tcp dport 19100 counter accept comment "sess-a" (verdict accept)
+inet authnft filter rule ct state established,related
+    ct mark & 0x00ffffff == 0x00000000 counter accept comment "ct-accept" (verdict accept)
 ```
 
 Denied by the site's rule inside the shared chain (`traces/denied-by-site.txt`):
@@ -125,9 +141,14 @@ What it does not control, and cannot:
   admission path and nothing else, so an admitted flow ran to its natural
   end. Each session now tags its connections with an id in the conntrack
   mark and the shared chain accepts established traffic only while that id
-  is live, so close revokes the flow on its next packet (D1, I2). A
-  ctnetlink flush by source address still works too (D3) and remains the
-  fallback where no id was allocated.
+  is live, so close revokes the flow on its next packet (D1, I2), for UDP
+  the same as for TCP (U1). A conntrack flush by source address remains
+  the fallback where no id was allocated; D4 isolates it (in D1-D3 the
+  gate revokes first). The revocation boundary runs exactly along
+  admission: an untag rule at the end of each session chain restores the
+  mark of flows the chain walked but did not admit, so close never
+  revokes a bystander the site admitted (I7, I8, issue #123) and never
+  touches pre-session flows (I3).
 - **Whether an accept is final.** Any base chain at a higher priority number
   on the same hook can overrule it (E3), and the module has no way to detect
   that arrangement. An earlier terminal rule in the shared chain used to
@@ -180,11 +201,12 @@ Two structural notes for future harnesses:
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | Established flows outlive close_session (D1) | **fixed.** The ct mark gate shipped; D1's expectation flipped from PASS to BLOCK and that PASS was the bug. Pinned by D1-D3, I1-I6 and integration 10.27 |
+| 1 | Established flows outlive close_session (D1) | **fixed.** The ct mark gate shipped; D1's expectation flipped from PASS to BLOCK and that PASS was the bug. Pinned by D1-D4, I1-I6, U1 and integration 10.27 |
 | 2 | Two of three site-deny placements silently defeat the module (E2, E3) | issue #105; the ordering half fixed by `0327f21`, pinned by E4-E9 and integration 10.26. E3 remains, unfixable by rule order |
 | 3 | The ct rule does not rescue a flow conntrack was not already tracking (C3) | issue #111, precondition documented in ARCHITECTURE.txt, pinned by C1/C2/C3 |
 | 4 | ARCHITECTURE.txt cites 10.12 as validating Class B survival; 10.12 validates the negative half only | corrected to cite C1/C2 |
 | 5 | A rule an included fragment adds to the shared chain outlives every session and keeps denying (G4, G5) | working as designed (INTEGRATIONS 4.5/4.6); pinned by G4/G5 |
+| 6 | Session close revoked flows the session never admitted: the tag rule stamped every new flow that walked the chain, and one login's logout cut another's traffic (I7, I8) | issue #123, **fixed** by the end-of-chain untag rule; falsified on the wire before the fix was written, pinned by I7/I8 and integration 10.32 (revert-flip verified) |
 
 Finding 5 is a persistence property, not a bypass. An included file is
 allowed to add rules to the shared chain (INTEGRATIONS 4.6, and

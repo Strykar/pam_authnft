@@ -140,6 +140,39 @@ flow() { # <src-addr> <port>
 
 verdict() { flow "$1" "$2" && echo PASS || echo BLOCK; }
 
+# The v6 and UDP legs of the same observables. ::1 is up whenever lo is;
+# UDP readiness polls ss -Hlun because there is no listen state to wait on.
+serve6() { # <port> <cgroup-relative-path>
+    bash -c "echo \$\$ > /sys/fs/cgroup/$2/cgroup.procs
+             exec socat TCP6-LISTEN:$1,reuseaddr,fork EXEC:/bin/cat" &
+    SRV_PIDS+=($!)
+    for _ in $(seq 1 50); do
+        ss -Hltn "sport = :$1" 2>/dev/null | grep -q . && return 0
+        sleep 0.1
+    done
+    return 1
+}
+flow6() { # <port>
+    local out
+    out=$(printf 'ping\n' | timeout 4 socat -T2 - \
+          "TCP6:[::1]:$1,connect-timeout=2" 2>/dev/null)
+    [[ "$out" == "ping" ]]
+}
+serve_udp() { # <port> <cgroup-relative-path>
+    # UDP-RECVFROM,fork: every reply is sent from the bound port, so it
+    # matches the client flow's reply direction. UDP-LISTEN's forked child
+    # answers correctly too, but only RECVFROM survived the client matrix
+    # this arm was debugged with.
+    bash -c "echo \$\$ > /sys/fs/cgroup/$2/cgroup.procs
+             exec socat UDP-RECVFROM:$1,reuseaddr,fork EXEC:/bin/cat" &
+    SRV_PIDS+=($!)
+    for _ in $(seq 1 50); do
+        ss -Hlun "sport = :$1" 2>/dev/null | grep -q . && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
 # Record a case. Fails the run when the wire disagrees with the claim.
 check() { # <case-id> <expected PASS|BLOCK> <observed> <what this pins>
     local id="$1" want="$2" got="$3" desc="$4"
@@ -335,6 +368,18 @@ check A3 BLOCK "$(verdict $BAD_SRC $SVC)" "allowed port, source not in the sessi
 counter_moved A2 "deny-$ALT" 0 "the A2 packets arrived and were dropped, not never sent"
 counter_moved A3 "deny-$SVC" 0 "the A3 packets arrived and were dropped, not never sent"
 printf "       sess-a=%s\n" "$(cnt sess-a)"
+
+# A4/A5: the v6 leg. Every session gets a v6 set and nothing above ever put
+# a packet through one.
+serve6 19106 "$CG_A" || die "v6 listener never came up"
+nft add element inet authnft session_a_v6 "{ \"$CG_A\" . ::1 timeout 1d }" || die "v6 element"
+nft add rule inet authnft session_a socket cgroupv2 level 2 . ip6 saddr @session_a_v6 tcp dport 19106 counter accept comment '"sess-a-v6"' || die "v6 rule"
+site_deny 19106
+check A4 PASS  "$(flow6 19106 && echo PASS || echo BLOCK)" "same session over v6, source in the v6 set"
+counter_moved A4 sess-a-v6 0 "the v6 set match did the admitting"
+nft delete element inet authnft session_a_v6 "{ \"$CG_A\" . ::1 }" || die "v6 element removal"
+check A5 BLOCK "$(flow6 19106 && echo PASS || echo BLOCK)" "v6 source no longer in the set"
+counter_moved A5 "deny-19106" 0 "the v6 packets arrived and were dropped"
 
 # ======================================================================
 note "B. Isolation: one session's rules must not admit another's traffic"
@@ -880,6 +925,49 @@ check I8 PASS "$I8" "one session's close does not revoke a flow it never admitte
 revoke "$CTM_B"; module_down b
 exec 7<&-
 
+# U1: UDP parity for revocation. UDP "established" is only seen-a-reply,
+# so the gate's arms carry it identically; close must end it identically.
+# The session is built inline rather than through ctmark_up: the udp
+# accept has to sit between the tag and the untag, where call 3 puts a
+# fragment's rules, and ctmark_up bakes a tcp-only accept there.
+table_down
+nft -f - <<RULES || die "U1: gate and session setup"
+add table inet authnft
+add chain inet authnft filter { type filter hook input priority filter - 1; policy accept; }
+add set inet authnft live_sessions { type mark; }
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK 0x0 counter accept comment "est-unsessioned"
+add rule inet authnft filter ct state established,related ct mark and $SESS_MASK @live_sessions counter accept comment "est-live"
+add chain inet authnft session_a
+add set inet authnft session_a_v4 { typeof socket cgroupv2 level 2 . ip saddr; flags timeout; }
+add set inet authnft session_a_v6 { typeof socket cgroupv2 level 2 . ip6 saddr; flags timeout; }
+add set inet authnft session_a_cg { typeof socket cgroupv2 level 2; flags timeout; }
+add element inet authnft session_a_v4 { "$CG_A" . $OK_SRC timeout 1d }
+add rule inet authnft session_a ct state new ct mark set ct mark and $ADMIN_MASK or $CTM_A counter comment "tag-a"
+add rule inet authnft session_a socket cgroupv2 level 2 . ip saddr @session_a_v4 udp dport 19107 counter accept comment "sess-a-udp"
+add rule inet authnft session_a ct state new ct mark set ct mark and $ADMIN_MASK comment "untag-a"
+add element inet authnft live_sessions { $CTM_A }
+RULES
+session_built a
+nft insert rule inet authnft filter jump session_a || die "U1: jump"
+serve_udp 19107 "$CG_A" || die "U1: udp listener never came up"
+nft add rule inet authnft filter udp dport 19107 counter drop comment '"deny-udp-19107"' || die "U1: udp deny"
+# The client is a socat coprocess, not bash's /dev/udp: on this host a
+# connected /dev/udp socket never delivers the echo to read even though
+# tcpdump shows it arriving with the right ports (socat receives the same
+# reply fine). One coprocess means one socket and one source port, so
+# every datagram below belongs to the same conntrack flow, which is what
+# revocation is about.
+coproc U1SOC { socat -T30 - UDP:127.0.0.1:19107; }
+printf 'one\n' >&"${U1SOC[1]}"
+read -t 3 -r _ <&"${U1SOC[0]}" || die "U1: udp flow never worked"
+revoke "$CTM_A"
+module_down a
+drain "${U1SOC[0]}"; printf 'two\n' >&"${U1SOC[1]}"
+if read -t 3 -r _ <&"${U1SOC[0]}"; then U1=PASS; else U1=BLOCK; fi
+check U1 BLOCK "$U1" "udp flow admitted during the session, revoked at close"
+counter_moved U1 deny-udp-19107 0 "the post-close datagrams arrived and were dropped"
+kill "$U1SOC_PID" 2>/dev/null
+
 # ======================================================================
 note "H. Packet traces: the kernel's own account of the traversal"
 # ======================================================================
@@ -935,7 +1023,7 @@ done
 # A section that dies quietly, or an arm that is edited out, shows up here
 # as a short matrix rather than as a clean pass. This is the D3 class the
 # codex bot found: the run reported success for cases it never executed.
-EXPECTED_CASES=40
+EXPECTED_CASES=43
 if [[ ${#ROWS[@]} -ne $EXPECTED_CASES ]]; then
     printf "\n${RED}>>> %d cases recorded, expected %d. A section did not run.${RESET}\n" \
         "${#ROWS[@]}" "$EXPECTED_CASES"
