@@ -364,7 +364,7 @@ static uint64_t ct_rule_handle(struct nft_ctx *ctx) {
  * created yet (e.g., call 1 failed atomically), the transaction will
  * fail and we discard the result.
  *
- * Edge case: if call 2 succeeded but the handle parse failed, the jump
+ * Edge case: if the jump call succeeded but the handle parse failed, the jump
  * rule exists in the kernel but `sd->jump_handle` is still 0. We can't
  * delete-by-name (nftables requires handle), so the jump rule leaks in
  * that path. Documented; rare (only fires on a libnftables echo-format
@@ -802,102 +802,9 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         }
     }
 
-    /*
-     * Call 2: jump rule in the shared filter chain. ECHO + HANDLE flags
-     * make libnftables print the committed rule with its kernel-assigned
-     * handle, which we parse and store for cleanup.
-     *
-     * Positioned after the ct rule, not appended. The site's default-deny
-     * lives outside the module and the admin can only place it after the
-     * jumps that exist when they place it. Appending put every later
-     * session behind it: the session authenticated, installed
-     * correct-looking rules, and passed no traffic, while an earlier
-     * session on the same host kept working.
-     *
-     * Order among session jumps does not matter: each matches only its
-     * own cgroup and source, so at most one can fire for a given packet.
-     * What does matter is that the ct rule stays first, so established
-     * traffic short-circuits before walking any session chain.
-     *
-     * Measured as E4 (appended, shadowed) against E6 (admitted), with E5
-     * and E7 as controls, plus E8 for a deny that predates every session,
-     * in tests/packet_flow_matrix.sh. #105.
-     */
-    /* Read the handle before switching the context into echo mode for call
-     * 2: ct_rule_handle drives its own buffering and flags, and doing that
-     * inside call 2's setup tears down the echo output the jump-handle
-     * parse below depends on. */
-    uint64_t cth = ct_rule_handle(ctx);
-
-    nft_ctx_output_set_flags(ctx,
-        NFT_CTX_OUTPUT_ECHO | NFT_CTX_OUTPUT_HANDLE);
-    nft_ctx_buffer_output(ctx);
-
-    if (cth) {
-        snprintf(cmd, sizeof(cmd),
-                 "add rule inet %s filter position %" PRIu64 " jump %s",
-                 TABLE_NAME, cth, sd->chain_name);
-    } else {
-        /* Fall back to the head of the chain. Still ahead of any site deny,
-         * so #105 stays fixed; it only costs the established fast path. A
-         * slower correct order beats a denied login. */
-        pam_syslog(pamh, LOG_WARNING,
-                   "authnft: could not read the ct rule handle; placing the "
-                   "jump at the head of the shared chain");
-        snprintf(cmd, sizeof(cmd),
-                 "insert rule inet %s filter jump %s",
-                 TABLE_NAME, sd->chain_name);
-    }
-
-    DEBUG_PRINT("nft call 2 (jump rule):\n%s", cmd);
-    if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
-        const char *err_msg = nft_ctx_get_error_buffer(ctx);
-        pam_syslog(pamh, LOG_ERR, "authnft: jump rule failed: %s", err_msg);
-        nft_ctx_unbuffer_output(ctx);
-        /* Roll back call 1 state. jump_handle is still 0 so the
-         * partial cleanup skips the rule-delete branch correctly. */
-        nft_partial_cleanup(ctx, sd);
-        free(frag_buf);
-        nft_ctx_free(ctx);
-        return PAM_SERVICE_ERR;
-    }
-
-    /* nft prints rule output as: <body> [comment "..."] # handle <id>.
-     * If a comment ever contains the substring "# handle N", strstr would
-     * find that first and sscanf would extract the wrong number. The jump
-     * rule we just added has no comment, but a future maintainer adding
-     * one (e.g., to encode scope_unit for cleanup hardening) would silently
-     * break this parser. Scan for the LAST occurrence — the real handle
-     * marker is always last on the line. See nftables rule.c:520-521 for
-     * the print order: comment, then handle. */
-    const char *out = nft_ctx_get_output_buffer(ctx);
-    uint64_t handle = 0;
-    const char *h = NULL;
-    if (out) {
-        for (const char *p = out, *q; (q = strstr(p, "# handle ")); p = q + 9)
-            h = q;
-    }
-    if (!h || sscanf(h, "# handle %" SCNu64, &handle) != 1 || handle == 0) {
-        pam_syslog(pamh, LOG_ERR,
-                   "authnft: could not parse jump rule handle from nft output");
-        nft_ctx_unbuffer_output(ctx);
-        /* Roll back call 1 state. The jump rule was committed (call 2
-         * succeeded) but we never captured its handle, so it leaks
-         * here — see comment on nft_partial_cleanup. */
-        nft_partial_cleanup(ctx, sd);
-        free(frag_buf);
-        nft_ctx_free(ctx);
-        return PAM_SERVICE_ERR;
-    }
-    sd->jump_handle = handle;
-    DEBUG_PRINT("jump rule handle: %" PRIu64, handle);
-
-    nft_ctx_unbuffer_output(ctx);
-    /* Clear ECHO/HANDLE flags for call 3 — fragment output is noise. */
-    nft_ctx_output_set_flags(ctx, 0);
 
     /*
-     * Call 3: read the fragment, substitute placeholders, execute.
+     * Call 2: read the fragment, substitute placeholders, execute.
      *
      * Four placeholders are replaced with live per-session names:
      *   @session_v4    → per-session IPv4 set name
@@ -946,7 +853,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         return PAM_SERVICE_ERR;
     }
 
-    DEBUG_PRINT("nft call 3 (substituted fragment):\n%s", subst_buf);
+    DEBUG_PRINT("nft call 2 (substituted fragment):\n%s", subst_buf);
     if (nft_run_cmd_from_buffer(ctx, subst_buf) != 0) {
         const char *err_msg = nft_ctx_get_error_buffer(ctx);
         (void)pam_syslog(pamh, LOG_ERR,
@@ -961,7 +868,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
     free(subst_buf);
 
     /*
-     * Call 4: untag. Fragments admit; they do not admit everything they
+     * Call 3: untag. Fragments admit; they do not admit everything they
      * walk. The tag rule at the head of this chain stamps every new flow
      * entering it, including flows no rule here accepts: those fall off
      * the end and must leave with the mark they came in with, or this
@@ -978,7 +885,7 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
              "add rule inet %s %s ct state new ct mark set ct mark and "
              AUTHNFT_MARK_ADMIN_STR " comment \"" UNTAG_COMMENT "\"",
              TABLE_NAME, sd->chain_name);
-    DEBUG_PRINT("nft call 4 (untag rule):\n%s", cmd);
+    DEBUG_PRINT("nft call 3 (untag rule):\n%s", cmd);
     if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
         pam_syslog(pamh, LOG_ERR, "authnft: untag rule failed: %s",
                    nft_ctx_get_error_buffer(ctx));
@@ -986,6 +893,104 @@ int nft_handler_setup(pam_handle_t *pamh, const char *user,
         nft_ctx_free(ctx);
         return PAM_SERVICE_ERR;
     }
+
+    /*
+     * Call 4: jump rule in the shared filter chain. ECHO + HANDLE flags
+     * make libnftables print the committed rule with its kernel-assigned
+     * handle, which we parse and store for cleanup.
+     *
+     * Positioned after the ct rule, not appended. The site's default-deny
+     * lives outside the module and the admin can only place it after the
+     * jumps that exist when they place it. Appending put every later
+     * session behind it: the session authenticated, installed
+     * correct-looking rules, and passed no traffic, while an earlier
+     * session on the same host kept working.
+     *
+     * Order among session jumps does not matter: each matches only its
+     * own cgroup and source, so at most one can fire for a given packet.
+     * What does matter is that the ct rule stays first, so established
+     * traffic short-circuits before walking any session chain.
+     *
+     * Measured as E4 (appended, shadowed) against E6 (admitted), with E5
+     * and E7 as controls, plus E8 for a deny that predates every session,
+     * in tests/packet_flow_matrix.sh. #105.
+     *
+     * Last on purpose: the jump is what makes the chain reachable, so
+     * everything the chain must contain (tag, fragment rules, untag) is
+     * committed before any packet can walk it. With the jump earlier, a
+     * bystander flow arriving during setup was stamped with no untag yet
+     * to clear it and died at this session's close: #123 in miniature,
+     * flagged by review on #124.
+     */
+    /* Read the handle before switching the context into echo mode for the
+     * jump call: ct_rule_handle drives its own buffering and flags, and doing that
+     * inside this call's setup tears down the echo output the jump-handle
+     * parse below depends on. */
+    uint64_t cth = ct_rule_handle(ctx);
+
+    nft_ctx_output_set_flags(ctx,
+        NFT_CTX_OUTPUT_ECHO | NFT_CTX_OUTPUT_HANDLE);
+    nft_ctx_buffer_output(ctx);
+
+    if (cth) {
+        snprintf(cmd, sizeof(cmd),
+                 "add rule inet %s filter position %" PRIu64 " jump %s",
+                 TABLE_NAME, cth, sd->chain_name);
+    } else {
+        /* Fall back to the head of the chain. Still ahead of any site deny,
+         * so #105 stays fixed; it only costs the established fast path. A
+         * slower correct order beats a denied login. */
+        pam_syslog(pamh, LOG_WARNING,
+                   "authnft: could not read the ct rule handle; placing the "
+                   "jump at the head of the shared chain");
+        snprintf(cmd, sizeof(cmd),
+                 "insert rule inet %s filter jump %s",
+                 TABLE_NAME, sd->chain_name);
+    }
+
+    DEBUG_PRINT("nft call 4 (jump rule):\n%s", cmd);
+    if (nft_run_cmd_from_buffer(ctx, cmd) != 0) {
+        const char *err_msg = nft_ctx_get_error_buffer(ctx);
+        pam_syslog(pamh, LOG_ERR, "authnft: jump rule failed: %s", err_msg);
+        nft_ctx_unbuffer_output(ctx);
+        /* Roll back the session state built so far (calls 1 to 3).
+         * jump_handle is still 0 so the partial cleanup skips the
+         * rule-delete branch correctly. */
+        nft_partial_cleanup(ctx, sd);
+        nft_ctx_free(ctx);
+        return PAM_SERVICE_ERR;
+    }
+
+    /* nft prints rule output as: <body> [comment "..."] # handle <id>.
+     * If a comment ever contains the substring "# handle N", strstr would
+     * find that first and sscanf would extract the wrong number. The jump
+     * rule we just added has no comment, but a future maintainer adding
+     * one (e.g., to encode scope_unit for cleanup hardening) would silently
+     * break this parser. Scan for the LAST occurrence — the real handle
+     * marker is always last on the line. See nftables rule.c:520-521 for
+     * the print order: comment, then handle. */
+    const char *out = nft_ctx_get_output_buffer(ctx);
+    uint64_t handle = 0;
+    const char *h = NULL;
+    if (out) {
+        for (const char *p = out, *q; (q = strstr(p, "# handle ")); p = q + 9)
+            h = q;
+    }
+    if (!h || sscanf(h, "# handle %" SCNu64, &handle) != 1 || handle == 0) {
+        pam_syslog(pamh, LOG_ERR,
+                   "authnft: could not parse jump rule handle from nft output");
+        nft_ctx_unbuffer_output(ctx);
+        /* Roll back the session state built so far. The jump rule was
+         * committed (call 4 succeeded) but we never captured its handle,
+         * so it leaks here — see comment on nft_partial_cleanup. */
+        nft_partial_cleanup(ctx, sd);
+        nft_ctx_free(ctx);
+        return PAM_SERVICE_ERR;
+    }
+    sd->jump_handle = handle;
+    DEBUG_PRINT("jump rule handle: %" PRIu64, handle);
+
+    nft_ctx_unbuffer_output(ctx);
 
     nft_ctx_free(ctx);
     return PAM_SUCCESS;
