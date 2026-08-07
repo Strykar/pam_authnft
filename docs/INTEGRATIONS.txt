@@ -406,12 +406,28 @@ site that composes policy through includes needs its own answer for
 retiring those rules. The per-session chain is the place for anything
 that should die with the session.
 
-The nft transaction is three separate nft_run_cmd_from_buffer calls.
-If call (c) fails (e.g., a syntax error in the fragment), the
-per-session chain, sets, and jump rule from calls (a) and (b) remain.
-The session is denied with PAM_AUTH_ERR. The orphaned per-session
-state has no matching fragment rules and is reaped at the next session
-close or manually via `nft delete table inet authnft`.
+Being walked is not being admitted. Every new flow that traverses a
+session chain is stamped with the session's conntrack-mark id by the
+chain's first rule; an untag rule the module appends after the
+fragment's rules restores the mark of any flow the chain did not
+accept, so a flow the site admits elsewhere is not revoked when this
+session closes (packet-flow cases I7 and I8, integration 10.32, issue
+#123). One escape: a fragment rule that ends in `return` leaves the
+chain before the untag runs, so a flow it returns keeps the session's
+id and is revoked with the session. Do not end fragment rules with
+`return` unless that is the intent.
+
+The nft transaction is four separate nft_run_cmd_from_buffer calls:
+(a) infrastructure and per-session objects, (b) the substituted
+fragment, (c) the untag rule, (d) the jump rule. The jump comes last on
+purpose: it is what makes the chain reachable, so the chain's contents
+are complete before any packet can walk it. If (b) fails (e.g., a
+syntax error in the fragment) the session is denied with PAM_AUTH_ERR;
+if (c) or (d) fails it is denied with PAM_SERVICE_ERR. Either way a
+best-effort rollback removes the per-session objects, and anything it
+could not remove is reaped by the stale-state self-heal at the next
+open for the same user and PID, or manually via
+`nft delete table inet authnft`.
 
 4.6 Composing fragments via nftables `include`
 

@@ -26,10 +26,14 @@ On a supported kernel, configured as documented, pam_authnft upholds:
   passing on their next packet. Each session tags its connections with
   an id in the conntrack mark; the shared chain accepts established
   traffic only while that id is live. Flows the module never admitted,
-  including the SSH connection the login arrived on, are untagged and
-  unaffected. Pinned by cases D1 to D4 and I1 to I6 of
-  `make test-packet-flow`, and by integration case 10.27 which exercises
-  the id lifecycle through the module itself. D4 isolates the
+  including the SSH connection the login arrived on and flows the site's
+  own rules admit while a session is open, end up untagged and
+  unaffected: an untag rule at the end of each session chain restores
+  the mark of anything the chain walked but did not accept (issue #123).
+  Pinned by cases D1 to D4, I1 to I8 and U1 of
+  `make test-packet-flow`, and by integration cases 10.27 and 10.32
+  which exercise the id lifecycle and the untag boundary through the
+  module itself. D4 isolates the
   conntrack-flush fallback for sessions that never received an id; in
   D1 to D3 the gate revokes first. D1 expected the opposite
   before the gate landed, and that expectation was the bug (issue #103).

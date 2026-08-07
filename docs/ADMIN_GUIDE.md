@@ -233,7 +233,11 @@ Position within that chain does not matter. The module places each
 session's jump immediately after the shared established-accept gate, so every jump precedes your deny however many sessions open
 afterwards, and whether the deny was placed before or after any of them
 [E6, E8]. The ct rule stays first, so established traffic short-circuits
-there instead of walking every live session chain [E9]. Before this the module appended, and a session
+there instead of walking every live session chain [E9]. Your own accepts
+compose safely with sessions: a flow your rules admit is never revoked
+by some session's close, however many sessions were open when it
+established [I7, I8], and session close revokes the session's own flows
+for UDP the same as for TCP [U1]. Before this the module appended, and a session
 opened after the deny was never reached: it authenticated, installed
 correct-looking rules, showed a moving counter and passed no traffic,
 while an earlier session on the same host kept working [E4, E5].
