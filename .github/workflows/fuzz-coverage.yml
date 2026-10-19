@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
 
       - id: scope
-        uses: ./.github/actions/fuzz-scope
+        uses: $/.github/actions/fuzz-scope
       - name: Install dependencies
         if: steps.scope.outputs.relevant == 'true'
         run: |

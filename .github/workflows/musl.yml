@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
 
       - id: scope
-        uses: ./.github/actions/docs-only
+        uses: $/.github/actions/docs-only
       - name: build + unit suite on musl (Alpine)
         if: steps.scope.outputs.result != 'true'
         # Builds pam_authnft against musl and runs the unit suite, whose
